@@ -15,20 +15,36 @@ import java.util.List;
 public final class MatrixSolver {
     private MatrixSolver() {}
 
+    /** Detalhe de um passo da eliminação: coluna, pivô, troca e fatores. */
+    public record StepDetail(int column, int pivotRow, boolean swapped,
+                             List<Factor> factors) {}
+    /** Fator usado para zerar uma linha: L_linha -= fator x L_pivô. */
+    public record Factor(int row, double value) {}
+    /** Um passo da retrosubstituição, com os termos já substituídos. */
+    public record BackStep(int index, double rhs, List<Term> terms,
+                           double divisor, double result) {}
+    /** Termo da retrosubstituição: coeficiente x incógnita (valor já conhecido). */
+    public record Term(double coefficient, String unknown, double value) {}
+
     /** Rasto da eliminação de Gauss: matrizes, notas e retrosubstituição. */
     public static final class Trace {
         private final double[][] initialAugmented;
         private final List<double[][]> steps;
         private final List<String> stepNotes;
+        private final List<StepDetail> stepDetails;
         private final List<String> backSubstitution;
+        private final List<BackStep> backSteps;
         private final double[] solution;
 
         Trace(double[][] initialAugmented, List<double[][]> steps,
-              List<String> stepNotes, List<String> backSubstitution, double[] solution) {
+              List<String> stepNotes, List<StepDetail> stepDetails,
+              List<String> backSubstitution, List<BackStep> backSteps, double[] solution) {
             this.initialAugmented = initialAugmented;
             this.steps = steps;
             this.stepNotes = stepNotes;
+            this.stepDetails = stepDetails;
             this.backSubstitution = backSubstitution;
+            this.backSteps = backSteps;
             this.solution = solution;
         }
 
@@ -42,8 +58,12 @@ public final class MatrixSolver {
         }
         /** Nota de cada passo (coluna eliminada, troca de linhas, fator). */
         public List<String> getStepNotes() { return List.copyOf(stepNotes); }
+        /** Detalhe estruturado de cada passo da eliminação (pivô e fatores). */
+        public List<StepDetail> getStepDetails() { return List.copyOf(stepDetails); }
         /** Passos da retrosubstituição, um por incógnita (da última à primeira). */
         public List<String> getBackSubstitution() { return List.copyOf(backSubstitution); }
+        /** Retrosubstituição estruturada (termos já substituídos). */
+        public List<BackStep> getBackSteps() { return List.copyOf(backSteps); }
         public double[] getSolution() { return solution.clone(); }
 
         private static double[][] copy(double[][] m) {
@@ -69,6 +89,7 @@ public final class MatrixSolver {
 
         List<double[][]> steps = new ArrayList<>();
         List<String> notes = new ArrayList<>();
+        List<StepDetail> details = new ArrayList<>();
         for (int col = 0; col < n; col++) {
             int pivot = col;
             double best = Math.abs(m[col][col]);
@@ -83,15 +104,18 @@ public final class MatrixSolver {
             }
             StringBuilder note = new StringBuilder("Coluna " + (col + 1) + ": pivô = linha "
                 + (pivot + 1) + " (" + fmtTrace(m[pivot][col]) + ")");
-            if (pivot != col) {
+            boolean swapped = pivot != col;
+            if (swapped) {
                 double[] tmp = m[pivot];
                 m[pivot] = m[col];
                 m[col] = tmp;
                 note.append(" — troca das linhas ").append(col + 1).append(" e ").append(pivot + 1);
             }
+            List<Factor> factors = new ArrayList<>();
             for (int r = col + 1; r < n; r++) {
                 double f = m[r][col] / m[col][col];
                 if (f == 0.0) continue;
+                factors.add(new Factor(r, f));
                 note.append("; L").append(r + 1).append(" -= ").append(fmtTrace(f))
                     .append(" x L").append(col + 1);
                 for (int c = col; c <= n; c++) {
@@ -104,24 +128,29 @@ public final class MatrixSolver {
             for (int i = 0; i < n; i++) snapshot[i] = m[i].clone();
             steps.add(snapshot);
             notes.add(note.toString());
+            details.add(new StepDetail(col, pivot, swapped, factors));
         }
 
         double[] x = new double[n];
         List<String> back = new ArrayList<>();
+        List<BackStep> backSteps = new ArrayList<>();
         for (int i = n - 1; i >= 0; i--) {
             double s = m[i][n];
             StringBuilder step = new StringBuilder("x" + (i + 1) + " = ("
                 + fmtTrace(m[i][n]));
+            List<Term> terms = new ArrayList<>();
             for (int j = i + 1; j < n; j++) {
                 s -= m[i][j] * x[j];
+                terms.add(new Term(m[i][j], "x" + (j + 1), x[j]));
                 step.append(" - (").append(fmtTrace(m[i][j])).append(" x ")
                     .append(fmtTrace(x[j])).append(")");
             }
             step.append(") / ").append(fmtTrace(m[i][i])).append(" = ").append(fmtTrace(s / m[i][i]));
             x[i] = s / m[i][i];
             back.add(step.toString());
+            backSteps.add(new BackStep(i, m[i][n], terms, m[i][i], x[i]));
         }
-        return new Trace(initial, steps, notes, back, x);
+        return new Trace(initial, steps, notes, details, back, backSteps, x);
     }
 
     private static String fmtTrace(double v) {

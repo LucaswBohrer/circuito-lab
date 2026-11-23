@@ -11,19 +11,25 @@ import com.circuitolab.model.Resistor;
 import com.circuitolab.model.VoltageSource;
 import com.circuitolab.model.Wire;
 import com.circuitolab.solver.Solution;
+import com.circuitolab.solver.StepByStep;
+import com.circuitolab.util.ValueParser;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.GridLayout;
 import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.Locale;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 
 /**
  * Canvas de desenho do circuito: grade com snap de 20 px, desenho de
@@ -75,6 +81,46 @@ public class CircuitCanvas extends JPanel {
         clearSolution();
         repaint();
         return removed;
+    }
+
+    /**
+     * Renderiza o circuito (com a solução atual, se houver) num
+     * BufferedImage offscreen, enquadrando os componentes. Usado pelo
+     * PDF exportado. Chama paintComponent() diretamente: paint()
+     * cortaria o desenho, porque o clip do Swing não acompanha a
+     * translação do enquadramento.
+     */
+    public BufferedImage renderImage() {
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+        for (Component c : circuit.getComponents()) {
+            minX = Math.min(minX, Math.min(c.getX1(), c.getX2()));
+            minY = Math.min(minY, Math.min(c.getY1(), c.getY2()));
+            maxX = Math.max(maxX, Math.max(c.getX1(), c.getX2()));
+            maxY = Math.max(maxY, Math.max(c.getY1(), c.getY2()));
+        }
+        for (Node n : circuit.getNodes()) {
+            if (n.isGround()) continue;
+            minX = Math.min(minX, n.getX());
+            minY = Math.min(minY, n.getY());
+            maxX = Math.max(maxX, n.getX());
+            maxY = Math.max(maxY, n.getY());
+        }
+        if (minX == Integer.MAX_VALUE) { minX = 0; minY = 0; maxX = 400; maxY = 300; }
+        int pad = 50;
+        // Margem extra à direita e em baixo: os rótulos ("N3: 6,00 V",
+        // correntes) e o símbolo de terra passam dos componentes.
+        int w = Math.max(500, maxX - minX + pad + 190);
+        int h = Math.max(320, maxY - minY + pad + 80);
+        setSize(w, h);
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, w, h);
+        g.translate(-minX + pad, -minY + pad);
+        paintComponent(g);
+        g.dispose();
+        return img;
     }
     public void setTool(Tool tool) { this.tool = tool; }
     public void setSolution(Solution solution) {
@@ -209,23 +255,55 @@ public class CircuitCanvas extends JPanel {
         }
     }
 
+    /**
+     * Duplo clique: edita o RÓTULO e o VALOR do componente. O rótulo tem
+     * de ser único (é ele que aparece no passo a passo e nas tabelas);
+     * o valor aceita vírgula decimal e sufixos ("2k" = 2000 Ω,
+     * "10m" = 0,01 A). O id interno não muda.
+     */
     private void onDoubleClick(MouseEvent e) {
         Component c = findComponentNear(e.getPoint());
-        if (c == null || c instanceof Wire || c instanceof Ground) return;
-        String unit = c.getUnit();
-        String input = JOptionPane.showInputDialog(this,
-            "Novo valor para " + c.getLabel() + " (" + unit + "):",
-            String.valueOf(c.getValue()));
-        if (input == null) return;
-        try {
-            double v = Double.parseDouble(input.trim().replace(',', '.'));
-            c.setValue(v);
-            clearSolution();
-            repaint();
-        } catch (NumberFormatException ex) {
-            JOptionPane.showMessageDialog(this, "Valor inválido: " + input,
+        if (c == null || c instanceof Ground) return;
+        boolean hasValue = !(c instanceof Wire);
+        JTextField labelField = new JTextField(c.getLabel());
+        JTextField valueField = new JTextField(hasValue ? String.valueOf(c.getValue()) : "(sem valor)");
+        valueField.setEnabled(hasValue);
+        JPanel panel = new JPanel(new GridLayout(0, 2, 6, 6));
+        panel.add(new JLabel("Rótulo:"));
+        panel.add(labelField);
+        panel.add(new JLabel("Valor (" + c.getUnit() + "):"));
+        panel.add(valueField);
+        panel.add(new JLabel(""));
+        panel.add(new JLabel("Valor aceita 1,5 e sufixos: 2k, 10m, 10u."));
+        int ok = JOptionPane.showConfirmDialog(this, panel,
+            "Editar " + c.getLabel() + " (" + StepByStep.typePt(c) + ")",
+            JOptionPane.OK_CANCEL_OPTION);
+        if (ok != JOptionPane.OK_OPTION) return;
+        String newLabel = labelField.getText().trim();
+        if (newLabel.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "O rótulo não pode estar vazio.",
                 "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
         }
+        if (circuit.isLabelUsed(newLabel, c)) {
+            JOptionPane.showMessageDialog(this, "Já existe um componente com o rótulo \""
+                + newLabel + "\". Escolha outro rótulo.", "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        double v = c.getValue();
+        if (hasValue) {
+            try {
+                v = ValueParser.parse(valueField.getText());
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(),
+                    "Erro", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+        c.setLabel(newLabel);
+        if (hasValue) c.setValue(v);
+        clearSolution();
+        repaint();
     }
 
     @Override
@@ -287,8 +365,22 @@ public class CircuitCanvas extends JPanel {
                 g2.drawRect(mx - 14, my - 6, 28, 12);
             } else if (c instanceof VoltageSource) {
                 g2.drawOval(mx - 11, my - 11, 22, 22);
-                g2.drawString("+", mx - 3, my - 12);
-                g2.drawString("−", mx - 3, my + 20);
+                // "+" junto ao terminal A (o terminal + real) e "−" junto
+                // ao terminal B: antes o "+" ficava sempre em cima, mesmo
+                // quando a fonte estava desenhada de baixo para cima.
+                // Os sinais ficam ao lado do fio (deslocamento
+                // perpendicular), para o traço do "+" não se confundir
+                // com o fio.
+                double dx = x1 - mx, dy = y1 - my;
+                double len = Math.hypot(dx, dy);
+                if (len > 0) {
+                    double ux = dx / len, uy = dy / len;
+                    double px = -uy, py = ux; // perpendicular ao fio
+                    g2.drawString("+",
+                        (int) (mx + ux * 18 + px * 13 - 3), (int) (my + uy * 18 + py * 13 + 4));
+                    g2.drawString("−",
+                        (int) (mx - ux * 18 + px * 13 - 3), (int) (my - uy * 18 + py * 13 + 4));
+                }
             } else if (c instanceof CurrentSource) {
                 g2.drawOval(mx - 11, my - 11, 22, 22);
                 g2.drawString("↑", mx - 4, my + 4);

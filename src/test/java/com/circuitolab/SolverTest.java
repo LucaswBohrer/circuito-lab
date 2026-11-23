@@ -1,7 +1,9 @@
 package com.circuitolab;
 
+import com.circuitolab.io.PdfExporter;
 import com.circuitolab.model.Capacitor;
 import com.circuitolab.model.Circuit;
+import com.circuitolab.model.Component;
 import com.circuitolab.model.CurrentSource;
 import com.circuitolab.model.Inductor;
 import com.circuitolab.model.Node;
@@ -13,6 +15,11 @@ import com.circuitolab.solver.Solution;
 import com.circuitolab.solver.SolverException;
 import com.circuitolab.solver.StepByStep;
 import com.circuitolab.ui.Examples;
+import com.circuitolab.util.ValueParser;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * Testes do solver MNA. Runner próprio (sem JUnit): cada teste devolve
@@ -278,5 +285,152 @@ public class SolverTest {
             return;
         }
         throw new AssertionError("Devia lançar SolverException (nó flutuante).");
+    }
+
+    // ------------------------------------------------------------------
+    // v1.2 — ValueParser, renomear, renumerar, passo a passo e PDF.
+    // ------------------------------------------------------------------
+
+    /** ValueParser: sufixos e vírgula decimal. */
+    public static void valueParser() {
+        approx(ValueParser.parse("2k"), 2000.0, "2k = 2000");
+        approx(ValueParser.parse("2,2k"), 2200.0, "2,2k = 2200");
+        approx(ValueParser.parse("10m"), 0.01, "10m = 0,01");
+        approx(ValueParser.parse("1,5"), 1.5, "1,5 = 1.5");
+        approx(ValueParser.parse("10u"), 0.00001, "10u = 10 µ");
+        approx(ValueParser.parse("12"), 12.0, "12 = 12");
+        approx(ValueParser.parse("2kΩ"), 2000.0, "2kΩ = 2000");
+        approx(ValueParser.parse("-10"), -10.0, "-10 = -10");
+        try {
+            ValueParser.parse("abc");
+        } catch (NumberFormatException e) {
+            check(e.getMessage().contains("inválido"), "Erro devia dizer inválido.");
+            return;
+        }
+        throw new AssertionError("Devia lançar NumberFormatException para \"abc\".");
+    }
+
+    /** Renomear: isLabelUsed deteta duplicados e o id interno não muda. */
+    public static void renomearRotulo() throws SolverException {
+        Circuit c = Examples.divisorTensao();
+        Component r1 = null;
+        for (Component comp : c.getComponents()) {
+            if (comp.getLabel().equals("R1")) r1 = comp;
+        }
+        check(r1 != null, "Exemplo devia ter R1.");
+        check(c.isLabelUsed("R1", null), "R1 devia estar em uso.");
+        check(c.isLabelUsed("r1", null), "Comparação de rótulos devia ignorar maiúsculas.");
+        check(!c.isLabelUsed("R1", r1), "O próprio componente não conta como duplicado.");
+        check(!c.isLabelUsed("R9", null), "R9 não devia estar em uso.");
+        r1.setLabel("R9");
+        check(r1.getId().equals("R1"), "O id interno não pode mudar ao renomear.");
+        check(c.isLabelUsed("R9", null), "R9 devia estar em uso depois de renomear.");
+        Solution s = MnaSolver.solve(c);
+        approx(s.currentOf("R1"), 0.004, "Corrente continua indexada pelo id R1.");
+    }
+
+    /** Renumerar componentes: R1, R2...; V1, V2...; ids e solução iguais. */
+    public static void renumberComponents() throws SolverException {
+        Circuit c = new Circuit("Renumerar");
+        Node n1 = node(c, 100);
+        Node n2 = node(c, 200);
+        c.addComponent(new VoltageSource("V7", "V7", n1.getId(), Node.GROUND_ID, 12, 100, 100, 100, 0));
+        c.addComponent(new Resistor("R9", "R9", n1.getId(), n2.getId(), 1000, 100, 100, 200, 100));
+        c.addComponent(new Resistor("R2", "R5", n2.getId(), Node.GROUND_ID, 2000, 200, 100, 200, 200));
+        Solution before = MnaSolver.solve(c);
+        int changed = c.renumberComponents();
+        check(changed == 3, "Devia alterar 3 rótulos, alterou " + changed + ".");
+        check(c.getComponents().get(0).getLabel().equals("V1"), "Fonte devia virar V1.");
+        check(c.getComponents().get(1).getLabel().equals("R1"), "1º resistor devia virar R1.");
+        check(c.getComponents().get(2).getLabel().equals("R2"), "2º resistor devia virar R2.");
+        check(c.getComponents().get(0).getId().equals("V7"), "Id da fonte não pode mudar.");
+        check(c.getComponents().get(1).getId().equals("R9"), "Id do resistor não pode mudar.");
+        Solution after = MnaSolver.solve(c);
+        approx(after.voltageOf(n2.getId()), before.voltageOf(n2.getId()),
+            "Tensão não pode mudar com a renumeração.");
+        approx(after.currentOf("R9"), before.currentOf("R9"),
+            "Corrente (por id) não pode mudar com a renumeração.");
+        String next = c.nextId("R");
+        check(!c.isLabelUsed(next, null), "Próximo id não pode colidir com rótulo existente.");
+    }
+
+    /** Renumerar nós: ids sequenciais (terra 0), tensões e correntes iguais. */
+    public static void renumberNodes() throws SolverException {
+        Circuit c = new Circuit("Renumerar nós");
+        c.addNodeWithId(new Node(5, 100, 100));
+        c.addNodeWithId(new Node(9, 200, 100));
+        c.addComponent(new VoltageSource("V1", "V1", 5, Node.GROUND_ID, 12, 100, 100, 100, 0));
+        c.addComponent(new Resistor("R1", "R1", 5, 9, 1000, 100, 100, 200, 100));
+        c.addComponent(new Resistor("R2", "R2", 9, Node.GROUND_ID, 2000, 200, 100, 200, 200));
+        Solution before = MnaSolver.solve(c);
+        approx(before.voltageOf(9), 8.0, "Tensão no nó 9 antes de renumerar.");
+        java.util.Map<Integer, Integer> mapping = c.renumberNodes();
+        check(mapping.get(0) == 0, "Terra continua N0.");
+        check(mapping.get(5) == 1 && mapping.get(9) == 2, "Nós deviam virar 1 e 2.");
+        check(c.getNode(5) == null && c.getNode(9) == null, "Ids antigos não podem existir.");
+        check(c.getNode(1) != null && c.getNode(2) != null, "Ids novos têm de existir.");
+        Component r1 = c.getComponents().get(1);
+        check(r1.getNodeA() == 1 && r1.getNodeB() == 2, "Componente devia apontar para os nós novos.");
+        Solution after = MnaSolver.solve(c);
+        approx(after.voltageOf(2), 8.0, "Tensão no nó renumerado (2) devia continuar 8 V.");
+        approx(after.currentOf("R1"), before.currentOf("R1"),
+            "Corrente não pode mudar com a renumeração dos nós.");
+        approx(after.currentOf("R2"), before.currentOf("R2"),
+            "Corrente em R2 não pode mudar com a renumeração dos nós.");
+    }
+
+    /** Passo a passo explicado: secções 0-6, mapa com rótulos reais, unidades amigáveis. */
+    public static void stepByStepExplained() throws SolverException {
+        Circuit c = Examples.divisorTensao();
+        String text = MnaSolver.solveWithSteps(c).format();
+        String[] sections = {
+            "0. Mapa do circuito", "1. O que vamos calcular", "2. Equações",
+            "3. Como a matriz", "4. Eliminação de Gauss", "5. Retrosubstituição",
+            "6. Resultado e conferência"
+        };
+        for (String s : sections) {
+            check(text.contains(s), "Passo a passo devia ter a secção \"" + s + "\".");
+        }
+        check(text.contains("R1"), "Mapa devia mostrar o rótulo R1.");
+        check(text.contains("V(N2)"), "Passo a passo devia mostrar V(N2).");
+        check(text.contains("8,000 V"), "Tensão do nó devia aparecer como 8,000 V.");
+        check(text.contains("4,000 mA"), "Corrente devia aparecer como 4,000 mA.");
+        check(text.contains("condutância") || text.contains("Condutância"),
+            "Passo a passo devia explicar a condutância.");
+        check(text.contains("LKC"), "Passo a passo devia mencionar a LKC.");
+        check(text.contains("Balanço de potência") || text.contains("balanço de potência"),
+            "Passo a passo devia ter o balanço de potência.");
+    }
+
+    /** Exportar PDF: ficheiro válido, %PDF, imagem embutida, mais de 1 página. */
+    public static void pdfExport() throws Exception {
+        Circuit c = Examples.serie();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        Path tmp = Files.createTempFile("circuitolab-teste-", ".pdf");
+        try {
+            PdfExporter.export(c, steps, tmp);
+            byte[] bytes = Files.readAllBytes(tmp);
+            check(bytes.length > 5000, "PDF devia ter mais de 5 KB, tem " + bytes.length + ".");
+            String head = new String(bytes, 0, 5, StandardCharsets.US_ASCII);
+            check(head.equals("%PDF-"), "PDF devia começar com %PDF-, começa com \"" + head + "\".");
+            String all = new String(bytes, StandardCharsets.ISO_8859_1);
+            check(all.contains("/Image"), "PDF devia conter a imagem do desenho (/Image).");
+            check(all.contains("/FlateDecode"), "Imagem devia usar FlateDecode.");
+            check(all.contains("%%EOF"), "PDF devia terminar com %%EOF.");
+            int pages = countOccurrences(all, "/Type /Page ");
+            check(pages >= 2, "PDF do passo a passo devia ter mais de 1 página, tem " + pages + ".");
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(needle, idx)) >= 0) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
     }
 }

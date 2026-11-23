@@ -2,6 +2,7 @@ package com.circuitolab.ui;
 
 import com.circuitolab.io.CircuitFileIO;
 import com.circuitolab.io.CsvExporter;
+import com.circuitolab.io.PdfExporter;
 import com.circuitolab.io.ReportExporter;
 import com.circuitolab.model.Circuit;
 import com.circuitolab.solver.MnaSolver;
@@ -10,7 +11,9 @@ import com.circuitolab.solver.SolverException;
 import com.circuitolab.solver.StepByStep;
 
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.event.ActionEvent;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import javax.swing.ButtonGroup;
@@ -67,9 +70,14 @@ public class MainFrame extends JFrame {
         arquivo.addSeparator();
         arquivo.add(item("Exportar CSV...", e -> exportarCsv()));
         arquivo.add(item("Exportar relatório TXT...", e -> exportarRelatorio()));
+        arquivo.add(item("Exportar passo a passo (PDF)...", e -> exportarPdfPassoAPasso()));
         arquivo.addSeparator();
         arquivo.add(item("Sair", e -> dispose()));
         bar.add(arquivo);
+
+        JMenu editar = new JMenu("Editar");
+        editar.add(item("Renumerar componentes e nós", e -> renumerar()));
+        bar.add(editar);
 
         JMenu exemplos = new JMenu("Exemplos");
         exemplos.add(item("Divisor de Tensão", e -> carregarExemplo(Examples.divisorTensao())));
@@ -85,10 +93,10 @@ public class MainFrame extends JFrame {
 
         JMenu ajuda = new JMenu("Ajuda");
         ajuda.add(item("Sobre", e -> JOptionPane.showMessageDialog(this,
-            "CircuitoLab v1.0\nSimulador de circuitos DC (Análise Nodal Modificada).\n"
+            "CircuitoLab v1.2\nSimulador de circuitos DC (Análise Nodal Modificada).\n"
             + "Java puro (JDK 21, sem dependências).\n\n"
-            + "Desenhe com clique-arrastar, duplo clique edita o valor,\n"
-            + "Ctrl+R resolve o circuito.",
+            + "Desenhe com clique-arrastar, duplo clique edita o rótulo e\n"
+            + "o valor, Ctrl+R resolve o circuito.",
             "Sobre o CircuitoLab", JOptionPane.INFORMATION_MESSAGE)));
         bar.add(ajuda);
         return bar;
@@ -161,13 +169,67 @@ public class MainFrame extends JFrame {
             statusBar.setText("Passo a passo gerado: " + circuit.getComponents().size()
                 + " componentes, " + steps.getSolution().getNodeVoltages().size() + " nós.");
             new StepByStepDialog(this, "Passo a Passo — " + circuit.getName(),
-                steps.format()).setVisible(true);
+                steps.format(), circuit, steps).setVisible(true);
         } catch (SolverException e) {
             canvas.clearSolution();
             resultsPanel.clear();
             statusBar.setText("Erro: " + e.getMessage());
             JOptionPane.showMessageDialog(this, e.getMessage(),
                 "Não foi possível resolver", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Renumera rótulos (R1, R2...; V1, V2...) e nós, e resolve de novo. */
+    private void renumerar() {
+        int changed = circuit.renumberComponents();
+        java.util.Map<Integer, Integer> nodes = circuit.renumberNodes();
+        canvas.clearSolution();
+        resultsPanel.clear();
+        statusBar.setText("Renumerado: " + changed + " rótulo(s) alterado(s), "
+            + (nodes.size() - 1) + " nó(s) renumerado(s) (terra continua N0). A resolver de novo...");
+        resolver();
+    }
+
+    /** Nome de ficheiro sugerido para o PDF: "<circuito>-passo-a-passo.pdf". */
+    static String suggestedPdfName(String circuitName) {
+        String base = circuitName.replaceAll("[^\\p{L}\\p{N}]+", "-").replaceAll("(^-|-$)", "");
+        if (base.isEmpty()) base = "circuito";
+        return base + "-passo-a-passo.pdf";
+    }
+
+    /** Exporta o passo a passo para PDF (JFileChooser); usado pelo menu e pelo diálogo. */
+    static boolean exportPdfDialog(Component parent, Circuit circuit, StepByStep steps) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Exportar passo a passo (PDF)");
+        chooser.setFileFilter(new FileNameExtensionFilter("PDF (*.pdf)", "pdf"));
+        chooser.setSelectedFile(new File(suggestedPdfName(circuit.getName())));
+        if (chooser.showSaveDialog(parent) != JFileChooser.APPROVE_OPTION) return false;
+        Path path = chooser.getSelectedFile().toPath();
+        if (!path.toString().toLowerCase().endsWith(".pdf")) {
+            path = path.resolveSibling(path.getFileName() + ".pdf");
+        }
+        try {
+            PdfExporter.export(circuit, steps, path);
+            JOptionPane.showMessageDialog(parent, "PDF exportado para:\n" + path,
+                "Exportar PDF", JOptionPane.INFORMATION_MESSAGE);
+            return true;
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(parent, "Não foi possível exportar: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
+    }
+
+    private void exportarPdfPassoAPasso() {
+        try {
+            StepByStep steps = MnaSolver.solveWithSteps(circuit);
+            canvas.setSolution(steps.getSolution());
+            resultsPanel.setResults(circuit, steps.getSolution());
+            if (exportPdfDialog(this, circuit, steps)) {
+                statusBar.setText("Passo a passo exportado para PDF.");
+            }
+        } catch (SolverException e) {
+            JOptionPane.showMessageDialog(this, e.getMessage(), "Não foi possível resolver", JOptionPane.ERROR_MESSAGE);
         }
     }
 

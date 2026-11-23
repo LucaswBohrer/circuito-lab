@@ -22,6 +22,12 @@ public class TestRunner {
         tests.put("erro: fonte de tensão em curto", SolverTest::erroFonteEmCurto);
         tests.put("erro: circuito vazio", SolverTest::erroCircuitoVazio);
         tests.put("erro: nó flutuante", SolverTest::erroNoFlutuante);
+        tests.put("ValueParser: 2k, 10m, 1,5, 10u, 2kΩ", SolverTest::valueParser);
+        tests.put("renomear rótulo: isLabelUsed, id inalterado", () -> run(SolverTest::renomearRotulo));
+        tests.put("renumerar componentes (R1, R2, V1; solução igual)", () -> run(SolverTest::renumberComponents));
+        tests.put("renumerar nós sem mudar o resultado", () -> run(SolverTest::renumberNodes));
+        tests.put("passo a passo explicado (secções 0-6)", () -> run(SolverTest::stepByStepExplained));
+        tests.put("exportar PDF (válido, imagem, >1 página)", () -> run(SolverTest::pdfExport));
 
         int passed = 0;
         int failed = 0;

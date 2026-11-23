@@ -87,6 +87,94 @@ public class Circuit {
         return prefix + (nextComponentSeq++);
     }
 
+    /** True se já existe outro componente com este rótulo (ignora {@code exclude}). */
+    public boolean isLabelUsed(String label, Component exclude) {
+        if (label == null) return false;
+        String wanted = label.trim();
+        for (Component c : components) {
+            if (c != exclude && c.getLabel().equalsIgnoreCase(wanted)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Renumera os rótulos em ordem de criação, por tipo (R1, R2, R3...;
+     * V1, V2...; I1...; C1...; L1...; W1...). Só o rótulo muda — o id
+     * interno não muda, por isso a Solution (indexada por id) continua
+     * válida. O terra (GND) não é renumerado.
+     * Devolve quantos rótulos mudaram.
+     */
+    public int renumberComponents() {
+        java.util.Map<String, Integer> counters = new java.util.LinkedHashMap<>();
+        int changed = 0;
+        int maxNumber = 0;
+        for (Component c : components) {
+            String prefix = prefixOf(c);
+            if (prefix == null) continue; // terra: não renumera
+            int n = counters.getOrDefault(prefix, 0) + 1;
+            counters.put(prefix, n);
+            String newLabel = prefix + n;
+            if (!newLabel.equals(c.getLabel())) {
+                c.setLabel(newLabel);
+                changed++;
+            }
+            if (n > maxNumber) maxNumber = n;
+        }
+        // O próximo componente criado não pode reutilizar um rótulo
+        // que já existe: o contador global passa para depois do maior.
+        if (maxNumber >= nextComponentSeq) nextComponentSeq = maxNumber + 1;
+        return changed;
+    }
+
+    /**
+     * Renumera os nós com ids sequenciais (o terra continua 0, os demais
+     * em ordem de criação) e atualiza nodeA/nodeB de cada componente.
+     * Node.getId() é final, por isso os objetos Node são recriados.
+     * As tensões e correntes da solução não mudam — só os números dos
+     * nós. Devolve o mapa id antigo -> id novo.
+     */
+    public java.util.Map<Integer, Integer> renumberNodes() {
+        java.util.Map<Integer, Integer> mapping = new java.util.LinkedHashMap<>();
+        mapping.put(Node.GROUND_ID, Node.GROUND_ID);
+        List<Node> newNodes = new ArrayList<>();
+        int next = 1;
+        for (Node n : nodes) {
+            if (n.isGround()) {
+                newNodes.add(n);
+                continue;
+            }
+            Node renamed = new Node(next, n.getX(), n.getY());
+            mapping.put(n.getId(), next);
+            newNodes.add(renamed);
+            next++;
+        }
+        nodes.clear();
+        nodes.addAll(newNodes);
+        nextNodeId = next;
+        for (Component c : components) {
+            c.setNodeA(mapping.getOrDefault(c.getNodeA(), c.getNodeA()));
+            c.setNodeB(mapping.getOrDefault(c.getNodeB(), c.getNodeB()));
+        }
+        return mapping;
+    }
+
+    /** Renumera componentes e nós (o mesmo menu faz os dois). */
+    public void renumberAll() {
+        renumberComponents();
+        renumberNodes();
+    }
+
+    /** Prefixo do rótulo por tipo de componente; null = não renumerar (terra). */
+    private static String prefixOf(Component c) {
+        if (c instanceof com.circuitolab.model.Resistor) return "R";
+        if (c instanceof com.circuitolab.model.VoltageSource) return "V";
+        if (c instanceof com.circuitolab.model.CurrentSource) return "I";
+        if (c instanceof com.circuitolab.model.Capacitor) return "C";
+        if (c instanceof com.circuitolab.model.Inductor) return "L";
+        if (c instanceof com.circuitolab.model.Wire) return "W";
+        return null;
+    }
+
     /** True se algum componente liga um nó ao terra (0). */
     public boolean hasExplicitGround() {
         for (Component c : components) {
