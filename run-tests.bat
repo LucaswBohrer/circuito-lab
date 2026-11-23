@@ -1,5 +1,5 @@
 @echo off
-REM CircuitoLab — compila e roda os testes no Windows (JDK 21 no PATH).
+REM CircuitoLab - compila e roda os testes no Windows (JDK 21 no PATH).
 REM Uso: .\run-tests.bat
 setlocal
 if not exist out mkdir out

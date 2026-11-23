@@ -1,5 +1,5 @@
 @echo off
-REM CircuitoLab — build + run no Windows (JDK 21 no PATH).
+REM CircuitoLab - build + run no Windows (JDK 21 no PATH).
 setlocal
 if not exist out mkdir out
 dir /s /b src\main\java\*.java > sources.txt
