@@ -28,6 +28,7 @@ import javax.swing.JPanel;
 /**
  * Canvas de desenho do circuito: grade com snap de 20 px, desenho de
  * componentes por clique-arrastar, mover e apagar, edição por duplo clique.
+ * Um clique simples sem arrastar não cria nó nem componente.
  */
 public class CircuitCanvas extends JPanel {
     public enum Tool {
@@ -42,7 +43,6 @@ public class CircuitCanvas extends JPanel {
     private Tool tool = Tool.RESISTOR;
     private Point dragStart;
     private Point dragCurrent;
-    private Node dragStartNode;
     private Node moveNode;
 
     public CircuitCanvas(Circuit circuit) {
@@ -62,9 +62,19 @@ public class CircuitCanvas extends JPanel {
 
     public Circuit getCircuit() { return circuit; }
     public void setCircuit(Circuit circuit) {
+        // Limpa nós soltos herdados do ficheiro/exemplo (ex.: de cliques antigos).
+        circuit.pruneUnusedNodes();
         this.circuit = circuit;
         this.solution = null;
         repaint();
+    }
+
+    /** Remove os nós soltos do circuito atual; devolve quantos removeu. */
+    public int pruneUnusedNodes() {
+        int removed = circuit.pruneUnusedNodes();
+        clearSolution();
+        repaint();
+        return removed;
     }
     public void setTool(Tool tool) { this.tool = tool; }
     public void setSolution(Solution solution) {
@@ -143,7 +153,10 @@ public class CircuitCanvas extends JPanel {
             moveNode = findNodeNear(p);
             return;
         }
-        dragStartNode = findOrCreateNode(p);
+        // Ferramentas de componente: um clique simples NÃO cria nó.
+        // O nó só é criado no mouseReleased, e só se houve arrastar de
+        // verdade — senão, clicar (ou duplo clicar para editar o valor)
+        // deixava um nó solto a cada clique.
     }
 
     private void onDrag(MouseEvent e) {
@@ -169,14 +182,16 @@ public class CircuitCanvas extends JPanel {
             repaint();
             return;
         }
-        if (dragStart == null || dragStartNode == null) return;
+        if (dragStart == null) return;
+        // Clique sem arrastar: não faz nada (não cria nó nem componente).
         if (dragStart.equals(p)) { dragStart = null; repaint(); return; }
+        // Arraste de verdade: aí sim criam-se/reutilizam-se os nós das pontas.
+        Node startNode = findOrCreateNode(dragStart);
         Node endNode = findOrCreateNode(p);
-        Component c = createComponent(tool, dragStartNode, endNode, dragStart, p);
+        Component c = createComponent(tool, startNode, endNode, dragStart, p);
         if (c != null) circuit.addComponent(c);
         clearSolution();
         dragStart = null;
-        dragStartNode = null;
         repaint();
     }
 
@@ -249,6 +264,9 @@ public class CircuitCanvas extends JPanel {
             g2.setColor(new Color(0, 100, 0));
             for (Node n : circuit.getNodes()) {
                 if (n.isGround()) continue;
+                // Só mostra a tensão se a solução contiver o nó: um nó solto
+                // não tem tensão calculada e nunca deve exibir "0.00 V".
+                if (!solution.getNodeVoltages().containsKey(n.getId())) continue;
                 double v = solution.voltageOf(n.getId());
                 g2.drawString("N" + n.getId() + ": " + fmtVolt(v), n.getX() + 8, n.getY() - 8);
             }

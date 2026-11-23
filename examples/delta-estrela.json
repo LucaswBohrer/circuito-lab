@@ -1,0 +1,12 @@
+{
+  "name": "Delta-Estrela (Triângulo-Estrela)",
+  "nodes": [{"id": 0, "x": 0, "y": 0}, {"id": 1, "x": 200, "y": 100}, {"id": 2, "x": 400, "y": 100}, {"id": 3, "x": 600, "y": 200}, {"id": 4, "x": 400, "y": 300}],
+  "components": [
+    {"type": "fonte_tensao", "id": "V1", "label": "V1", "nodeA": 1, "nodeB": 0, "value": 12.0, "x1": 200, "y1": 100, "x2": 200, "y2": 300}, 
+    {"type": "resistor", "id": "R1", "label": "R1", "nodeA": 1, "nodeB": 2, "value": 10.0, "x1": 200, "y1": 100, "x2": 400, "y2": 100}, 
+    {"type": "resistor", "id": "R2", "label": "R2", "nodeA": 2, "nodeB": 3, "value": 30.0, "x1": 400, "y1": 100, "x2": 600, "y2": 200}, 
+    {"type": "resistor", "id": "R3", "label": "R3", "nodeA": 3, "nodeB": 4, "value": 30.0, "x1": 600, "y1": 200, "x2": 400, "y2": 300}, 
+    {"type": "resistor", "id": "R4", "label": "R4", "nodeA": 2, "nodeB": 4, "value": 30.0, "x1": 400, "y1": 100, "x2": 400, "y2": 300}, 
+    {"type": "resistor", "id": "R5", "label": "R5", "nodeA": 4, "nodeB": 0, "value": 15.0, "x1": 400, "y1": 300, "x2": 400, "y2": 420}
+  ]
+}

@@ -68,6 +68,20 @@ public class Circuit {
         return nodes.removeIf(n -> n.getId() == id);
     }
 
+    /**
+     * Remove todos os nós soltos (sem nenhum componente ligado) — ex.:
+     * nós deixados por cliques antigos. Nunca remove o terra.
+     * Devolve quantos nós foram removidos.
+     */
+    public int pruneUnusedNodes() {
+        int removed = 0;
+        List<Node> copy = new ArrayList<>(nodes);
+        for (Node n : copy) {
+            if (removeNodeIfUnused(n.getId())) removed++;
+        }
+        return removed;
+    }
+
     /** Próximo id livre para um tipo, ex.: resistor -> "R3". */
     public String nextId(String prefix) {
         return prefix + (nextComponentSeq++);

@@ -7,9 +7,12 @@ import com.circuitolab.model.Inductor;
 import com.circuitolab.model.Node;
 import com.circuitolab.model.Resistor;
 import com.circuitolab.model.VoltageSource;
+import com.circuitolab.solver.MatrixSolver;
 import com.circuitolab.solver.MnaSolver;
 import com.circuitolab.solver.Solution;
 import com.circuitolab.solver.SolverException;
+import com.circuitolab.solver.StepByStep;
+import com.circuitolab.ui.Examples;
 
 /**
  * Testes do solver MNA. Runner próprio (sem JUnit): cada teste devolve
@@ -177,6 +180,86 @@ public class SolverTest {
             return;
         }
         throw new AssertionError("Devia lançar SolverException (circuito vazio).");
+    }
+
+    /** Nó de apoio por coordenadas (usado nos testes dos exemplos). */
+    private static Node nodeAt(Circuit c, int x, int y) {
+        for (Node n : c.getNodes()) {
+            if (n.getX() == x && n.getY() == y) return n;
+        }
+        throw new AssertionError("Nó não encontrado em (" + x + ", " + y + ").");
+    }
+
+    /** Série: 12 V, 1k + 2k + 3k => I = 2 mA; nós intermédios 10 V e 6 V. */
+    public static void resistoresSerie() throws SolverException {
+        Circuit c = Examples.serie();
+        Solution s = MnaSolver.solve(c);
+        approx(s.voltageOf(nodeAt(c, 200, 100).getId()), 12.0, "Tensão da fonte (série)");
+        approx(s.voltageOf(nodeAt(c, 400, 100).getId()), 10.0, "Tensão após R1 (série)");
+        approx(s.voltageOf(nodeAt(c, 600, 100).getId()), 6.0, "Tensão após R2 (série)");
+        approx(s.currentOf("R1"), 0.002, "Corrente total (série)");
+        approx(s.currentOf("R2"), 0.002, "Corrente em R2 (série)");
+        approx(s.currentOf("R3"), 0.002, "Corrente em R3 (série)");
+    }
+
+    /**
+     * Delta-Estrela: 12 V, série 10 Ω, delta 30 Ω, carga 15 Ω.
+     * Total 45 Ω => I = 0,2667 A; VA = 28/3 V; VB = 20/3 V; VC = 4 V.
+     */
+    public static void deltaEstrela() throws SolverException {
+        Circuit c = Examples.deltaEstrela();
+        Solution s = MnaSolver.solve(c);
+        approx(s.voltageOf(nodeAt(c, 400, 100).getId()), 28.0 / 3.0, "Tensão VA (delta-estrela)");
+        approx(s.voltageOf(nodeAt(c, 600, 200).getId()), 20.0 / 3.0, "Tensão VB (delta-estrela)");
+        approx(s.voltageOf(nodeAt(c, 400, 300).getId()), 4.0, "Tensão VC (delta-estrela)");
+        approx(s.currentOf("R1"), 12.0 / 45.0, "Corrente total (delta-estrela)");
+        approx(s.currentOf("R5"), 12.0 / 45.0, "Corrente na carga (delta-estrela)");
+        // A secção Delta→Estrela tem de existir, com R_Y = 10 Ω.
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        check(!steps.getDeltaSection().isEmpty(), "Passo a passo devia ter secção Delta→Estrela.");
+        boolean temRy10 = false;
+        for (String line : steps.getDeltaSection()) {
+            if (line.contains("10.000000")) temRy10 = true;
+        }
+        check(temRy10, "Secção Delta→Estrela devia mostrar R_Y = 10.000000 Ω.");
+    }
+
+    /** pruneUnusedNodes: remove o nó solto, mantém o nó usado e o terra. */
+    public static void pruneUnusedNodes() {
+        Circuit c = new Circuit("Prune");
+        Node usado = c.addNode(100, 100);
+        Node solto = c.addNode(200, 200);
+        c.addComponent(new VoltageSource("V1", "V1", usado.getId(), Node.GROUND_ID, 12, 100, 100, 100, 0));
+        int removed = c.pruneUnusedNodes();
+        check(removed == 1, "Devia remover 1 nó solto, removeu " + removed + ".");
+        check(c.getNode(solto.getId()) == null, "Nó solto devia ter sido removido.");
+        check(c.getNode(usado.getId()) != null, "Nó usado não devia ter sido removido.");
+        check(c.getNode(Node.GROUND_ID) != null, "Terra não devia ter sido removida.");
+        check(c.pruneUnusedNodes() == 0, "Segunda limpeza devia remover 0 nós.");
+    }
+
+    /** Traço da eliminação de Gauss no divisor: solução certa, matriz final triangular. */
+    public static void traceEliminacaoGauss() throws SolverException {
+        Circuit c = Examples.divisorTensao();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        MatrixSolver.Trace trace = steps.getTrace();
+        check(steps.getUnknowns().size() == 3, "Divisor devia ter 3 incógnitas.");
+        check(steps.getUnknowns().contains("V(N2)"), "Incógnitas deviam incluir V(N2).");
+        check(steps.getUnknowns().contains("I(V1)"), "Incógnitas deviam incluir I(V1).");
+        check(!steps.getEquations().isEmpty(), "Passo a passo devia ter equações.");
+        check(!trace.getSteps().isEmpty(), "Traço devia ter pelo menos 1 passo de eliminação.");
+        check(trace.getSteps().size() == trace.getStepNotes().size(),
+            "Cada passo devia ter a sua nota.");
+        double[] x = trace.getSolution();
+        approx(x[1], 8.0, "Solução do traço: V(N2) = 8 V");
+        double[][] last = trace.getSteps().get(trace.getSteps().size() - 1);
+        for (int i = 0; i < last.length; i++) {
+            for (int j = 0; j < i; j++) {
+                check(Math.abs(last[i][j]) < 1e-9,
+                    "Matriz final devia ser triangular superior (posição " + i + "," + j + ").");
+            }
+        }
+        check(!trace.getBackSubstitution().isEmpty(), "Traço devia ter retrosubstituição.");
     }
 
     /** Erro: nó flutuante (resistor entre dois nós sem caminho até ao terra). */

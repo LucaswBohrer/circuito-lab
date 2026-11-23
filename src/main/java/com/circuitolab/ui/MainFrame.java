@@ -7,6 +7,7 @@ import com.circuitolab.model.Circuit;
 import com.circuitolab.solver.MnaSolver;
 import com.circuitolab.solver.Solution;
 import com.circuitolab.solver.SolverException;
+import com.circuitolab.solver.StepByStep;
 
 import java.awt.BorderLayout;
 import java.awt.event.ActionEvent;
@@ -62,6 +63,7 @@ public class MainFrame extends JFrame {
         arquivo.add(item("Abrir...", e -> abrir()));
         arquivo.add(item("Salvar", e -> salvar()));
         arquivo.add(item("Salvar como...", e -> salvarComo()));
+        arquivo.add(item("Limpar nós soltos", e -> limparNosSoltos()));
         arquivo.addSeparator();
         arquivo.add(item("Exportar CSV...", e -> exportarCsv()));
         arquivo.add(item("Exportar relatório TXT...", e -> exportarRelatorio()));
@@ -72,8 +74,14 @@ public class MainFrame extends JFrame {
         JMenu exemplos = new JMenu("Exemplos");
         exemplos.add(item("Divisor de Tensão", e -> carregarExemplo(Examples.divisorTensao())));
         exemplos.add(item("Ponte de Wheatstone", e -> carregarExemplo(Examples.ponteWheatstone())));
+        exemplos.add(item("Resistores em Série", e -> carregarExemplo(Examples.serie())));
         exemplos.add(item("Resistores em Paralelo", e -> carregarExemplo(Examples.paralelo())));
+        exemplos.add(item("Delta-Estrela (Triângulo-Estrela)", e -> carregarExemplo(Examples.deltaEstrela())));
         bar.add(exemplos);
+
+        JMenu exibir = new JMenu("Exibir");
+        exibir.add(item("Passo a Passo...", e -> passoAPasso()));
+        bar.add(exibir);
 
         JMenu ajuda = new JMenu("Ajuda");
         ajuda.add(item("Sobre", e -> JOptionPane.showMessageDialog(this,
@@ -109,6 +117,9 @@ public class MainFrame extends JFrame {
         JButton resolver = new JButton("Resolver (Ctrl+R)");
         resolver.addActionListener(e -> resolver());
         bar.add(resolver);
+        JButton passos = new JButton("Passo a Passo");
+        passos.addActionListener(e -> passoAPasso());
+        bar.add(passos);
         getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
             .put(KeyStroke.getKeyStroke("control R"), "resolver");
         getRootPane().getActionMap().put("resolver", new javax.swing.AbstractAction() {
@@ -139,6 +150,33 @@ public class MainFrame extends JFrame {
             JOptionPane.showMessageDialog(this, e.getMessage(),
                 "Não foi possível resolver", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** Mostra o passo a passo completo da resolução do circuito atual. */
+    private void passoAPasso() {
+        try {
+            StepByStep steps = MnaSolver.solveWithSteps(circuit);
+            canvas.setSolution(steps.getSolution());
+            resultsPanel.setResults(circuit, steps.getSolution());
+            statusBar.setText("Passo a passo gerado: " + circuit.getComponents().size()
+                + " componentes, " + steps.getSolution().getNodeVoltages().size() + " nós.");
+            new StepByStepDialog(this, "Passo a Passo — " + circuit.getName(),
+                steps.format()).setVisible(true);
+        } catch (SolverException e) {
+            canvas.clearSolution();
+            resultsPanel.clear();
+            statusBar.setText("Erro: " + e.getMessage());
+            JOptionPane.showMessageDialog(this, e.getMessage(),
+                "Não foi possível resolver", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void limparNosSoltos() {
+        int removed = canvas.pruneUnusedNodes();
+        resultsPanel.clear();
+        statusBar.setText(removed == 0
+            ? "Nenhum nó solto para remover."
+            : "Removidos " + removed + (removed == 1 ? " nó solto." : " nós soltos."));
     }
 
     private void novoCircuito() {

@@ -2,7 +2,9 @@ package com.circuitolab.io;
 
 import com.circuitolab.model.Circuit;
 import com.circuitolab.model.Component;
+import com.circuitolab.solver.MnaSolver;
 import com.circuitolab.solver.Solution;
+import com.circuitolab.solver.SolverException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +32,14 @@ public final class ReportExporter {
                 solution.currentOf(c.getId()), solution.powerOf(c.getId())));
         }
         sb.append("\nNotas: capacitor em DC = circuito aberto; indutor e fio em DC = curto.\n");
+        // Passo a passo completo da resolução, no fim do relatório.
+        try {
+            sb.append("\n============================================================\n\n");
+            sb.append(MnaSolver.solveWithSteps(circuit).format());
+        } catch (SolverException ignored) {
+            // Sem passo a passo se o circuito não resolver; o relatório
+            // com a solução já calculada continua válido.
+        }
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
     }
 

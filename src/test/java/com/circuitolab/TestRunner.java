@@ -14,6 +14,10 @@ public class TestRunner {
         tests.put("duas fontes", () -> run(SolverTest::duasFontes));
         tests.put("capacitor em DC (circuito aberto)", () -> run(SolverTest::capacitorDcAberto));
         tests.put("indutor em DC (curto-circuito)", () -> run(SolverTest::indutorDcCurto));
+        tests.put("resistores em série (I=2 mA, 10 V e 6 V)", () -> run(SolverTest::resistoresSerie));
+        tests.put("delta-estrela (VA 9,333 V, VB 6,667 V, VC 4 V)", () -> run(SolverTest::deltaEstrela));
+        tests.put("pruneUnusedNodes remove nós soltos", SolverTest::pruneUnusedNodes);
+        tests.put("traço da eliminação de Gauss (divisor)", () -> run(SolverTest::traceEliminacaoGauss));
         tests.put("erro: circuito sem terra", SolverTest::erroSemTerra);
         tests.put("erro: fonte de tensão em curto", SolverTest::erroFonteEmCurto);
         tests.put("erro: circuito vazio", SolverTest::erroCircuitoVazio);
