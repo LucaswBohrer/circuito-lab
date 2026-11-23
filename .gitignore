@@ -1,0 +1,5 @@
+out/
+out-test/
+sources.txt
+*.class
+.DS_Store

@@ -1,0 +1,1 @@
+{"components":[{"id":"I1","label":"I1","nodeA":0,"nodeB":1,"type":"fonte_corrente","value":0.01,"x1":200,"x2":200,"y1":300,"y2":100},{"id":"R1","label":"R1","nodeA":1,"nodeB":0,"type":"resistor","value":1000,"x1":200,"x2":400,"y1":100,"y2":300}],"name":"Fonte de Corrente","nodes":[{"id":0,"x":0,"y":0},{"id":1,"x":200,"y":100}]}

@@ -1,0 +1,52 @@
+package com.circuitolab;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/** Runner de testes próprio (sem JUnit): imprime PASS/FAIL e sai com código != 0 se falhar. */
+public class TestRunner {
+    public static void main(String[] args) {
+        Map<String, Runnable> tests = new LinkedHashMap<>();
+        tests.put("divisor de tensão 12V 1k+2k => 8V, 4mA", () -> run(SolverTest::divisorTensao));
+        tests.put("resistores em paralelo", () -> run(SolverTest::resistoresParalelo));
+        tests.put("ponte de Wheatstone equilibrada (I central ~0)", () -> run(SolverTest::ponteWheatstoneEquilibrada));
+        tests.put("fonte de corrente", () -> run(SolverTest::fonteCorrente));
+        tests.put("duas fontes", () -> run(SolverTest::duasFontes));
+        tests.put("capacitor em DC (circuito aberto)", () -> run(SolverTest::capacitorDcAberto));
+        tests.put("indutor em DC (curto-circuito)", () -> run(SolverTest::indutorDcCurto));
+        tests.put("erro: circuito sem terra", SolverTest::erroSemTerra);
+        tests.put("erro: fonte de tensão em curto", SolverTest::erroFonteEmCurto);
+        tests.put("erro: circuito vazio", SolverTest::erroCircuitoVazio);
+        tests.put("erro: nó flutuante", SolverTest::erroNoFlutuante);
+
+        int passed = 0;
+        int failed = 0;
+        for (Map.Entry<String, Runnable> e : tests.entrySet()) {
+            try {
+                e.getValue().run();
+                System.out.println("PASS - " + e.getKey());
+                passed++;
+            } catch (Throwable t) {
+                System.out.println("FAIL - " + e.getKey() + ": " + t.getMessage());
+                failed++;
+            }
+        }
+        System.out.println("----------------------------------------");
+        System.out.println(passed + " passaram, " + failed + " falharam, de " + tests.size() + " testes.");
+        if (failed > 0) System.exit(1);
+    }
+
+    /** Adaptador: métodos de teste que lançam checked exceptions. */
+    private static void run(ThrowingRunnable r) {
+        try {
+            r.run();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @FunctionalInterface
+    interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+}
