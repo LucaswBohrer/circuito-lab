@@ -160,7 +160,7 @@ public class MainFrame extends JFrame {
         }
     }
 
-    /** Mostra o passo a passo completo da resolução do circuito atual. */
+    /** Mostra o passo a passo do circuito atual (aba Simples por padrão). */
     private void passoAPasso() {
         try {
             StepByStep steps = MnaSolver.solveWithSteps(circuit);
@@ -169,7 +169,7 @@ public class MainFrame extends JFrame {
             statusBar.setText("Passo a passo gerado: " + circuit.getComponents().size()
                 + " componentes, " + steps.getSolution().getNodeVoltages().size() + " nós.");
             new StepByStepDialog(this, "Passo a Passo — " + circuit.getName(),
-                steps.format(), circuit, steps).setVisible(true);
+                circuit, steps).setVisible(true);
         } catch (SolverException e) {
             canvas.clearSolution();
             resultsPanel.clear();

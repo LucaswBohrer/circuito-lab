@@ -28,6 +28,11 @@ public class TestRunner {
         tests.put("renumerar nós sem mudar o resultado", () -> run(SolverTest::renumberNodes));
         tests.put("passo a passo explicado (secções 0-6)", () -> run(SolverTest::stepByStepExplained));
         tests.put("exportar PDF (válido, imagem, >1 página)", () -> run(SolverTest::pdfExport));
+        tests.put("redes: N0/N4/N6/N8 são o mesmo ponto (circuito do Lucas)", SolverTest::netMergerLucasCircuit);
+        tests.put("versão simples: 1 incógnita 2,773 V (circuito do Lucas)", () -> run(SolverTest::simpleStepByStepLucasCircuit));
+        tests.put("versão completa continua igual (11 incógnitas, Gauss)", () -> run(SolverTest::completeVersionUnchanged));
+        tests.put("versão simples com 2 incógnitas (ponte)", () -> run(SolverTest::simpleStepByStepMultiUnknown));
+        tests.put("PDF: simples primeiro + apêndice completo", () -> run(SolverTest::pdfSimplePlusAppendix));
 
         int passed = 0;
         int failed = 0;

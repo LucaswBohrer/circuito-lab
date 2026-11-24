@@ -39,6 +39,8 @@ public class StepByStep {
     private final MatrixSolver.Trace trace;
     private final Solution solution;
     private final List<String> deltaSection;
+    /** Redes (nós que são o mesmo ponto elétrico) — só para a explicação. */
+    private final NetMerger nets;
 
     public StepByStep(Circuit circuit, List<String> unknowns, double[][] matrixA,
                       double[] vectorB, List<String> equations,
@@ -52,7 +54,11 @@ public class StepByStep {
         this.trace = trace;
         this.solution = solution;
         this.deltaSection = List.copyOf(deltaSection);
+        this.nets = new NetMerger(circuit);
     }
+
+    /** As redes do circuito (nós que são o mesmo ponto elétrico). */
+    public NetMerger getNets() { return nets; }
 
     public List<String> getUnknowns() { return unknowns; }
     public double[][] getMatrixA() { return copy(matrixA); }
@@ -137,6 +143,549 @@ public class StepByStep {
         if (!deltaSection.isEmpty()) section7Delta(sb);
         sb.append("Notas: capacitor em DC = circuito aberto; indutor e fio em DC = curto.\n");
         return sb.toString();
+    }
+
+    // ==================================================================
+    // VERSÃO SIMPLES — linguagem de leigo, sem matriz nem Gauss.
+    //
+    // Ideia: antes de fazer contas, juntar os nós que são o mesmo ponto
+    // (as redes) e separar o que já se sabe (terra e nós ligados direto
+    // a uma fonte) do que falta descobrir. Na maior parte dos circuitos
+    // só falta uma tensão — e aí a conta é uma equação só, resolvida
+    // passo a passo. O resto sai da Lei de Ohm.
+    // ==================================================================
+
+    /** Número curto: inteiro sem casas, senão 3 casas com vírgula ("20", "2,773"). */
+    static String shortNum(double v) {
+        if (v == 0.0) return "0";
+        if (Math.abs(v - Math.rint(v)) < 1e-9 && Math.abs(v) < 1e9) {
+            return String.valueOf((long) Math.rint(v));
+        }
+        return ValueParser.fmt3(v);
+    }
+
+    /** Corrente em linguagem simples: "0,361 A" em vez de "361,345 mA". */
+    static String fmtCurrentSimple(double a) {
+        if (a == 0.0) return "0 A";
+        double m = Math.abs(a);
+        if (m >= 0.01) return ValueParser.fmt3(a) + " A";
+        if (m >= 0.0001) return ValueParser.fmt3(a * 1000) + " mA";
+        return ValueParser.fmtCurrent(a);
+    }
+
+    /** Nome de um ponto para as explicações: "o terra" ou "o nó N5". */
+    private String netLabel(int nodeId) {
+        int rep = nets.netOf(nodeId);
+        return rep == Node.GROUND_ID ? "o terra" : "o nó N" + rep;
+    }
+
+    /** Ponto sem artigo, para usar depois de "do", "no", "ao": "terra" ou "nó N5". */
+    private String netPoint(int nodeId) {
+        int rep = nets.netOf(nodeId);
+        return rep == Node.GROUND_ID ? "terra" : "nó N" + rep;
+    }
+
+    /** Nome de uma rede (sem artigo): "Terra" ou "N5". */
+    private static String netName(int rep) {
+        return rep == Node.GROUND_ID ? "Terra" : "N" + rep;
+    }
+
+    /** Junta uma lista em PT-BR: "a", "a e b", "a, b e c". */
+    private static String joinPt(List<String> items) {
+        if (items.isEmpty()) return "";
+        if (items.size() == 1) return items.get(0);
+        if (items.size() == 2) return items.get(0) + " e " + items.get(1);
+        return String.join(", ", items.subList(0, items.size() - 1)) + " e " + items.get(items.size() - 1);
+    }
+
+    /** Descrição dos curtos que ligam os nós de uma rede ("pelos fios W7 e W8"). */
+    private String netLinksText(NetMerger.Net net) {
+        List<String> wireLabels = new ArrayList<>();
+        List<String> inductorLabels = new ArrayList<>();
+        boolean hasGround = false;
+        for (Component c : circuit.getComponents()) {
+            if (!NetMerger.isShortInDc(c)) continue;
+            if (net.nodes().contains(c.getNodeA()) && net.nodes().contains(c.getNodeB())) {
+                if (c instanceof Ground) hasGround = true;
+                else if (c instanceof Inductor) inductorLabels.add(c.getLabel());
+                else wireLabels.add(c.getLabel());
+            }
+        }
+        List<String> parts = new ArrayList<>();
+        if (!wireLabels.isEmpty()) {
+            parts.add(wireLabels.size() == 1
+                ? "pelo fio " + wireLabels.get(0)
+                : "pelos fios " + joinPt(wireLabels));
+        }
+        if (!inductorLabels.isEmpty()) {
+            parts.add(inductorLabels.size() == 1
+                ? "pelo indutor " + inductorLabels.get(0)
+                : "pelos indutores " + joinPt(inductorLabels));
+        }
+        if (hasGround) parts.add("pelo terra");
+        return joinPt(parts);
+    }
+
+    /** Uma rede conhecida: o representante, a tensão e o porquê de se saber. */
+    private record KnownNet(int rep, double voltage, String reason) {}
+
+    /**
+     * Tensões que já se sabem sem fazer conta: o terra (0 V) e as redes
+     * ligadas a ele (ou a outra rede conhecida) por uma fonte de tensão.
+     * Propaga-se de fonte em fonte até não haver mais nada a descobrir.
+     */
+    private List<KnownNet> knownNets() {
+        java.util.Map<Integer, Double> known = new java.util.LinkedHashMap<>();
+        java.util.Map<Integer, String> reason = new java.util.LinkedHashMap<>();
+        known.put(Node.GROUND_ID, 0.0);
+        reason.put(Node.GROUND_ID, "o terra é a referência: 0 V por definição.");
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (Component c : circuit.getComponents()) {
+                if (!(c instanceof VoltageSource)) continue;
+                int ra = nets.netOf(c.getNodeA());
+                int rb = nets.netOf(c.getNodeB());
+                if (ra == rb) continue;
+                Double va = known.get(ra);
+                Double vb = known.get(rb);
+                String v = ValueParser.fmtVoltage(c.getValue());
+                if (va != null && vb == null) {
+                    known.put(rb, va - c.getValue());
+                    reason.put(rb, "a fonte " + c.getLabel() + " liga " + netLabel(c.getNodeB())
+                        + " ao " + netPoint(c.getNodeA()) + ": está " + v
+                        + " abaixo do " + netPoint(c.getNodeA()) + ".");
+                    changed = true;
+                } else if (vb != null && va == null) {
+                    known.put(ra, vb + c.getValue());
+                    reason.put(ra, "a fonte " + c.getLabel() + " liga " + netLabel(c.getNodeA())
+                        + " ao " + netPoint(c.getNodeB()) + ": está " + v
+                        + " acima do " + netPoint(c.getNodeB()) + ".");
+                    changed = true;
+                }
+            }
+        }
+        List<KnownNet> out = new ArrayList<>();
+        for (var e : known.entrySet()) {
+            out.add(new KnownNet(e.getKey(), e.getValue(), reason.get(e.getKey())));
+        }
+        return out;
+    }
+
+    /** Redes cuja tensão falta descobrir (têm resistor ou fonte de corrente). */
+    private List<Integer> unknownNetReps(java.util.Map<Integer, Double> known) {
+        List<Integer> out = new ArrayList<>();
+        for (NetMerger.Net net : nets.nets()) {
+            if (known.containsKey(net.representative())) continue;
+            boolean hasBranch = false;
+            for (Component c : net.components()) {
+                if (c instanceof Resistor || c instanceof CurrentSource) { hasBranch = true; break; }
+            }
+            if (hasBranch) out.add(net.representative());
+        }
+        return out;
+    }
+
+    /** Texto da versão simples, pronto a mostrar, imprimir ou guardar. */
+    public String formatSimple() {
+        List<KnownNet> knownList = knownNets();
+        java.util.Map<Integer, Double> known = new java.util.LinkedHashMap<>();
+        for (KnownNet k : knownList) known.put(k.rep(), k.voltage());
+        List<Integer> unknown = unknownNetReps(known);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("CircuitoLab — Passo a passo simples\n");
+        sb.append("Circuito: ").append(circuit.getName()).append("\n");
+        sb.append("============================================================\n\n");
+        simpleSection1Goal(sb);
+        simpleSection2Known(sb, knownList, known);
+        simpleSection3Unknown(sb, unknown);
+        simpleSection4Math(sb, unknown, known);
+        simpleSection5Currents(sb);
+        simpleSection6Check(sb, unknown);
+        if (!deltaSection.isEmpty()) {
+            sb.append("Nota: este circuito tem um triângulo de resistores (delta).\n");
+            sb.append("A conversão para estrela está explicada na versão completa.\n");
+        }
+        return sb.toString();
+    }
+
+    // 1. O que a gente quer descobrir + o desenho, em poucas linhas.
+    private void simpleSection1Goal(StringBuilder sb) {
+        sb.append("1. O que a gente quer descobrir\n");
+        sb.append("   Queremos saber a tensão de cada ponto do circuito (quantos\n");
+        sb.append("   volts há entre esse ponto e o terra) e a corrente de cada\n");
+        sb.append("   componente. A tensão mede-se sempre em relação ao terra\n");
+        sb.append("   (0 V). A corrente de um resistor sai da Lei de Ohm:\n");
+        sb.append("   corrente = (tensão de um lado - tensão do outro lado)\n");
+        sb.append("   / resistência.\n\n");
+        sb.append("   O desenho:\n");
+        for (Component c : circuit.getComponents()) {
+            sb.append("   ").append(c.getLabel()).append(": ").append(typePt(c).toLowerCase())
+              .append(" de ").append(friendlyValue(c));
+            if (c instanceof Ground) {
+                sb.append(" — liga o nó N").append(c.getNodeA()).append(" ao terra (N0).\n");
+            } else {
+                sb.append(" — entre o nó N").append(c.getNodeA())
+                  .append(" e o nó N").append(c.getNodeB()).append(".\n");
+            }
+        }
+        sb.append("\n");
+    }
+
+    // 2. O que já se sabe: redes que são o mesmo ponto + fontes diretas.
+    private void simpleSection2Known(StringBuilder sb, List<KnownNet> knownList,
+                                     java.util.Map<Integer, Double> known) {
+        sb.append("2. O que já sabemos sem fazer conta\n");
+        sb.append("   Antes de qualquer conta, há pontos cuja tensão já se sabe:\n\n");
+        // Redes com mais de um nó: são o mesmo ponto, diz-se uma vez só.
+        for (NetMerger.Net net : nets.nets()) {
+            if (net.nodes().size() <= 1) continue;
+            List<String> names = new ArrayList<>();
+            for (int id : net.nodes()) names.add("N" + id);
+            String links = netLinksText(net);
+            sb.append("   - Os nós ").append(joinPt(names)).append(" são o mesmo ponto");
+            if (!links.isEmpty()) sb.append(" (estão ligados ").append(links).append(")");
+            sb.append(". Por isso, para a conta, contam como um ponto só.\n");
+        }
+        for (KnownNet k : knownList) {
+            if (k.rep() == Node.GROUND_ID) {
+                sb.append("   - O terra está em 0 V: é a referência, tudo se mede a partir dele.\n");
+                continue;
+            }
+            sb.append("   - ").append(netLabel(k.rep()).substring(0, 1).toUpperCase())
+              .append(netLabel(k.rep()).substring(1))
+              .append(" está em ").append(ValueParser.fmtVoltage(k.voltage()))
+              .append(": ").append(k.reason()).append("\n");
+        }
+        // Fontes entre dois pontos que ainda não se sabem: a diferença sabe-se.
+        for (Component c : circuit.getComponents()) {
+            if (!(c instanceof VoltageSource)) continue;
+            int ra = nets.netOf(c.getNodeA());
+            int rb = nets.netOf(c.getNodeB());
+            if (ra == rb || known.containsKey(ra) || known.containsKey(rb)) continue;
+            sb.append("   - A fonte ").append(c.getLabel()).append(" liga ")
+              .append(netLabel(c.getNodeA())).append(" ao ").append(netPoint(c.getNodeB()))
+              .append(": a diferença entre eles é ").append(ValueParser.fmtVoltage(c.getValue()))
+              .append(" (o valor da fonte).\n");
+        }
+        sb.append("\n");
+    }
+
+    // 3. O que falta descobrir: só as redes desconhecidas, nada mais.
+    private void simpleSection3Unknown(StringBuilder sb, List<Integer> unknown) {
+        sb.append("3. O que falta descobrir\n");
+        if (unknown.isEmpty()) {
+            sb.append("   Nada. Todas as tensões já se sabem: as fontes e o terra\n");
+            sb.append("   dizem tudo. Só falta calcular as correntes (secção 5).\n\n");
+            return;
+        }
+        if (unknown.size() == 1) {
+            int rep = unknown.get(0);
+            NetMerger.Net net = nets.netContaining(rep);
+            sb.append("   Só falta um ponto: ").append(netLabel(rep)).append(". ");
+            if (net != null && net.nodes().size() > 1) {
+                List<String> names = new ArrayList<>();
+                for (int id : net.nodes()) names.add("N" + id);
+                sb.append("(Os nós ").append(joinPt(names)).append(" são o mesmo ponto.) ");
+            }
+            sb.append("Vamos chamar V à tensão dele (em volts, em relação\n");
+            sb.append("   ao terra). É este V que vamos descobrir com a conta a seguir.\n\n");
+            return;
+        }
+        List<String> names = new ArrayList<>();
+        for (int rep : unknown) names.add(netLabel(rep));
+        sb.append("   Faltam ").append(unknown.size()).append(" pontos: ")
+          .append(joinPt(names)).append(".\n");
+        for (int rep : unknown) {
+            sb.append("   - Vamos chamar V(N").append(rep).append(") à tensão de ")
+              .append(netLabel(rep)).append(".\n");
+        }
+        sb.append("\n");
+    }
+
+    // 4. A conta: LKC no(s) nó(s) desconhecido(s); com 1 incógnita, a álgebra toda.
+    private void simpleSection4Math(StringBuilder sb, List<Integer> unknown,
+                                    java.util.Map<Integer, Double> known) {
+        sb.append("4. A conta\n");
+        if (unknown.isEmpty()) {
+            sb.append("   Não há conta para fazer: não há tensões por descobrir.\n\n");
+            return;
+        }
+        sb.append("   Regra: num ponto, o que entra tem de ser igual ao que sai\n");
+        sb.append("   (a carga não se acumula). É a Lei de Kirchhoff das Correntes.\n");
+        sb.append("   A corrente de um resistor é (tensão deste lado - tensão do\n");
+        sb.append("   outro lado) / resistência.\n\n");
+        if (unknown.size() == 1) {
+            simpleSingleUnknownMath(sb, unknown.get(0), known);
+        } else {
+            for (int rep : unknown) {
+                sb.append("   No ").append(netPoint(rep)).append(":\n");
+                sb.append("   ").append(kclEquationText(rep, "V(N" + rep + ")", known)).append(" = 0\n\n");
+            }
+            sb.append("   Isto é um sistema com ").append(unknown.size())
+              .append(" incógnitas. Os valores são:\n");
+            for (int rep : unknown) {
+                sb.append("   - V(N").append(rep).append(") = ")
+                  .append(ValueParser.fmtVoltage(solution.voltageOf(rep))).append("\n");
+            }
+            sb.append("   A resolução completa deste sistema, com matriz, está na\n");
+            sb.append("   versão completa (aba \"Completa\").\n\n");
+        }
+    }
+
+    /**
+     * Equação da LKC de um ponto desconhecido, em texto: um termo por
+     * resistor ("(V - 10)/20") e as fontes de corrente como constantes.
+     * "var" é o nome da incógnita ("V" ou "V(N5)").
+     */
+    private String kclEquationText(int rep, String var, java.util.Map<Integer, Double> known) {
+        List<String> terms = new ArrayList<>();
+        for (Component c : circuit.getComponents()) {
+            if (c instanceof Resistor r) {
+                int otherNet = -1;
+                if (nets.netOf(r.getNodeA()) == rep) otherNet = nets.netOf(r.getNodeB());
+                else if (nets.netOf(r.getNodeB()) == rep) otherNet = nets.netOf(r.getNodeA());
+                else continue;
+                if (otherNet == rep) continue; // resistor dentro da mesma rede: sem efeito
+                String rStr = shortNum(r.getValue());
+                if (known.containsKey(otherNet)) {
+                    double vw = known.get(otherNet);
+                    terms.add(vw == 0.0 ? var + "/" + rStr
+                        : "(" + var + " - " + shortNum(vw) + ")/" + rStr);
+                } else {
+                    terms.add("(" + var + " - V(N" + otherNet + "))/" + rStr);
+                }
+            } else if (c instanceof CurrentSource cs) {
+                boolean aIn = nets.netOf(cs.getNodeA()) == rep;
+                boolean bIn = nets.netOf(cs.getNodeB()) == rep;
+                if (aIn && !bIn) terms.add(fmtCurrentSimple(cs.getValue()));
+                else if (bIn && !aIn) terms.add("-" + fmtCurrentSimple(cs.getValue()));
+            }
+        }
+        if (terms.isEmpty()) return "0";
+        return String.join(" + ", terms).replace("+ -", "- ");
+    }
+
+    /** A álgebra completa para o caso de uma só incógnita. */
+    private void simpleSingleUnknownMath(StringBuilder sb, int rep,
+                                         java.util.Map<Integer, Double> known) {
+        // Coeficiente de V e lado direito: V * coeff = rhs.
+        double coeff = 0.0;
+        double rhs = 0.0;
+        List<String> invParts = new ArrayList<>();
+        List<String> rhsParts = new ArrayList<>();
+        List<String> termTexts = new ArrayList<>();
+        for (Component c : circuit.getComponents()) {
+            if (c instanceof Resistor r) {
+                int otherNet = -1;
+                if (nets.netOf(r.getNodeA()) == rep) otherNet = nets.netOf(r.getNodeB());
+                else if (nets.netOf(r.getNodeB()) == rep) otherNet = nets.netOf(r.getNodeA());
+                else continue;
+                if (otherNet == rep) continue;
+                String rStr = shortNum(r.getValue());
+                coeff += 1.0 / r.getValue();
+                invParts.add("1/" + rStr);
+                if (known.containsKey(otherNet)) {
+                    double vw = known.get(otherNet);
+                    if (vw == 0.0) {
+                        // (V - 0)/R é só V/R: escreve-se "V/R" e não entra no outro lado.
+                        termTexts.add("V/" + rStr);
+                    } else {
+                        rhs += vw / r.getValue();
+                        rhsParts.add(shortNum(vw) + "/" + rStr);
+                        termTexts.add("(V - " + shortNum(vw) + ")/" + rStr);
+                    }
+                } else {
+                    termTexts.add("(V - V(N" + otherNet + "))/" + rStr);
+                }
+            } else if (c instanceof CurrentSource cs) {
+                boolean aIn = nets.netOf(cs.getNodeA()) == rep;
+                boolean bIn = nets.netOf(cs.getNodeB()) == rep;
+                if (aIn && !bIn) {
+                    rhs -= cs.getValue();
+                    rhsParts.add("-" + fmtCurrentSimple(cs.getValue()));
+                    termTexts.add(fmtCurrentSimple(cs.getValue()));
+                } else if (bIn && !aIn) {
+                    rhs += cs.getValue();
+                    rhsParts.add(fmtCurrentSimple(cs.getValue()));
+                    termTexts.add("-" + fmtCurrentSimple(cs.getValue()));
+                }
+            }
+        }
+        double v = solution.voltageOf(rep);
+        sb.append("   No ").append(netPoint(rep)).append(" chegam os resistores. A soma\n");
+        sb.append("   do que sai dele tem de ser zero:\n");
+        sb.append("   ").append(String.join(" + ", termTexts).replace("+ -", "- ")).append(" = 0\n\n");
+        if (coeff < 1e-12) {
+            sb.append("   (Esta equação não tem resistores para isolar o V: o valor\n");
+            sb.append("   vem da versão completa.)\n\n");
+            sb.append("   V = ").append(ValueParser.fmtVoltage(v)).append("\n\n");
+            return;
+        }
+        sb.append("   Passo 1 — juntar os termos em V. Cada termo (V - número)/R\n");
+        sb.append("   contribui com V/R. Somando os inversos das resistências:\n");
+        sb.append("   V x (").append(String.join(" + ", invParts)).append(") = ")
+          .append(String.join(" + ", rhsParts).replace("+ -", "- ")).append("\n\n");
+        sb.append("   Passo 2 — fazer as contas dos dois lados:\n");
+        sb.append("   V x ").append(shortNum(coeff)).append(" = ")
+          .append(shortNum(rhs)).append("\n\n");
+        sb.append("   Passo 3 — isolar o V (dividir os dois lados por ")
+          .append(shortNum(coeff)).append("):\n");
+        sb.append("   V = ").append(shortNum(rhs)).append(" / ").append(shortNum(coeff))
+          .append(" = ").append(ValueParser.fmtVoltage(v)).append("\n\n");
+        sb.append("   ").append(netLabel(rep).substring(0, 1).toUpperCase())
+          .append(netLabel(rep).substring(1))
+          .append(" está a ").append(ValueParser.fmtVoltage(v))
+          .append(" em relação ao terra.\n\n");
+    }
+
+    // 5. As correntes, pela Lei de Ohm, com o sentido em palavras.
+    private void simpleSection5Currents(StringBuilder sb) {
+        sb.append("5. As correntes\n");
+        sb.append("   Agora que se sabem as tensões, cada corrente sai da Lei de Ohm.\n\n");
+        for (Component c : circuit.getComponents()) {
+            if (c instanceof Resistor r) {
+                double va = solution.voltageOf(c.getNodeA());
+                double vb = solution.voltageOf(c.getNodeB());
+                double i = solution.currentOf(c.getId());
+                sb.append("   - ").append(r.getLabel()).append(" (").append(friendlyValue(r))
+                  .append("): I = (").append(shortNum(va)).append(" - ").append(shortNum(vb))
+                  .append(")/").append(shortNum(r.getValue())).append(" = ")
+                  .append(fmtCurrentSimple(i)).append(". ");
+                if (i >= 1e-9) {
+                    sb.append("Vai do ").append(netPoint(c.getNodeA())).append(" (")
+                      .append(ValueParser.fmtVoltage(va)).append(") para ")
+                      .append(netLabel(c.getNodeB())).append(" (")
+                      .append(ValueParser.fmtVoltage(vb)).append(").\n");
+                } else if (i <= -1e-9) {
+                    sb.append("O sinal deu negativo: na realidade vai ao contrário, do ")
+                      .append(netPoint(c.getNodeB())).append(" (")
+                      .append(ValueParser.fmtVoltage(vb)).append(") para ")
+                      .append(netLabel(c.getNodeA())).append(" (")
+                      .append(ValueParser.fmtVoltage(va)).append(").\n");
+                } else {
+                    sb.append("Corrente ~0: não passa nada por aqui.\n");
+                }
+            } else if (c instanceof CurrentSource cs) {
+                sb.append("   - A fonte de corrente ").append(cs.getLabel())
+                  .append(" debita ").append(fmtCurrentSimple(cs.getValue()))
+                  .append(" do ").append(netPoint(cs.getNodeA())).append(" para ")
+                  .append(netLabel(cs.getNodeB())).append(" (é o valor dela, fixo).\n");
+            } else if (c instanceof Capacitor) {
+                sb.append("   - O capacitor ").append(c.getLabel())
+                  .append(" não deixa passar corrente em DC: I = 0 A.\n");
+            }
+        }
+        // Fios, indutores e fontes de tensão: uma frase curta cada um.
+        List<String> extras = new ArrayList<>();
+        for (Component c : circuit.getComponents()) {
+            if (c instanceof VoltageSource) {
+                double i = solution.currentOf(c.getId());
+                double p = solution.powerOf(c.getId());
+                if (Math.abs(i) < 1e-9) continue;
+                extras.add("a fonte " + c.getLabel() + " "
+                    + (p < 0 ? "fornece " : "absorve ") + fmtCurrentSimple(Math.abs(i)));
+            } else if (NetMerger.isShortInDc(c) && !(c instanceof Ground)) {
+                double i = solution.currentOf(c.getId());
+                if (Math.abs(i) < 1e-9) continue;
+                extras.add((c instanceof Inductor ? "o indutor " : "o fio ") + c.getLabel()
+                    + " leva " + fmtCurrentSimple(Math.abs(i)));
+            }
+        }
+        if (!extras.isEmpty()) {
+            String joined = joinPt(extras);
+            sb.append("\n   E os fios e as fontes? ")
+              .append(joined.substring(0, 1).toUpperCase()).append(joined.substring(1))
+              .append(".\n");
+        }
+        sb.append("\n");
+    }
+
+    // 6. Confere? LKC no ponto principal + balanço de potência, uma linha cada.
+    private void simpleSection6Check(StringBuilder sb, List<Integer> unknown) {
+        sb.append("6. Confere?\n");
+        int checkRep = -1;
+        if (!unknown.isEmpty()) {
+            checkRep = unknown.get(0);
+        } else {
+            // Sem incógnitas: conferir no ponto com mais resistores.
+            int best = 0;
+            for (NetMerger.Net net : nets.nets()) {
+                int count = 0;
+                for (Component c : net.components()) {
+                    if (c instanceof Resistor) count++;
+                }
+                if (count > best && net.representative() != Node.GROUND_ID) {
+                    best = count;
+                    checkRep = net.representative();
+                }
+            }
+        }
+        if (checkRep >= 0) {
+            sb.append(kclCheckSimple(checkRep));
+        }
+        double dissipated = 0.0;
+        double supplied = 0.0;
+        for (Component c : circuit.getComponents()) {
+            double p = solution.powerOf(c.getId());
+            if (c instanceof Resistor) dissipated += p;
+            if (p < 0) supplied += -p;
+        }
+        sb.append("   Potência: as fontes entregam ").append(ValueParser.fmtPower(supplied))
+          .append(" e os resistores gastam ").append(ValueParser.fmtPower(dissipated))
+          .append(". Os dois lados são iguais: a conta fecha.\n");
+    }
+
+    /** Conferência da LKC num ponto, em palavras: o que entra e o que sai. */
+    private String kclCheckSimple(int rep) {
+        List<String> in = new ArrayList<>();
+        List<String> out = new ArrayList<>();
+        double sumIn = 0.0;
+        double sumOut = 0.0;
+        double vRep = solution.voltageOf(rep);
+        for (Component c : circuit.getComponents()) {
+            boolean aIn = nets.netOf(c.getNodeA()) == rep;
+            boolean bIn = nets.netOf(c.getNodeB()) == rep;
+            if (!aIn && !bIn) continue;
+            double leaving;
+            if (c instanceof Resistor r) {
+                int other = aIn ? c.getNodeB() : c.getNodeA();
+                leaving = (vRep - solution.voltageOf(other)) / r.getValue();
+            } else if (c instanceof CurrentSource cs) {
+                leaving = aIn ? cs.getValue() : -cs.getValue();
+            } else if (c.isVoltageBranch()) {
+                double i = solution.currentOf(c.getId());
+                leaving = aIn ? i : -i;
+            } else {
+                continue; // capacitor: 0 A em DC
+            }
+            String desc = "por " + c.getLabel() + " (" + fmtCurrentSimple(Math.abs(leaving)) + ")";
+            if (leaving > 1e-9) { out.add(desc); sumOut += leaving; }
+            else if (leaving < -1e-9) { in.add(desc); sumIn += -leaving; }
+        }
+        StringBuilder b = new StringBuilder();
+        b.append("   No ").append(netPoint(rep)).append(": ");
+        if (in.isEmpty() && out.isEmpty()) {
+            b.append("não passa corrente nenhuma por aqui.\n");
+            return b.toString();
+        }
+        if (!in.isEmpty()) {
+            b.append("entram ").append(fmtCurrentSimple(sumIn)).append(", ").append(joinPt(in));
+        }
+        if (!out.isEmpty()) {
+            if (!in.isEmpty()) b.append("; ");
+            b.append("saem ").append(fmtCurrentSimple(sumOut)).append(", ").append(joinPt(out));
+        }
+        b.append(". ");
+        double diff = Math.abs(sumIn - sumOut);
+        if (diff < 0.001) {
+            b.append("Entra = sai: confere.\n");
+        } else {
+            b.append("Entra e sai deviam ser iguais (diferença de ")
+              .append(fmtCurrentSimple(diff)).append(").\n");
+        }
+        return b.toString();
     }
 
     // ------------------------------------------------------------------

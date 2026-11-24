@@ -34,10 +34,18 @@ public final class PdfExporter {
     private static final double MARGIN = 48;
     private static final double TEXT_W = PAGE_W - 2 * MARGIN;
 
-    /** Gera o PDF do circuito resolvido, com o passo a passo e o desenho. */
+    /**
+     * Gera o PDF do circuito resolvido: primeiro a versão simples do
+     * passo a passo e, como apêndice, a versão completa (com matriz).
+     */
     public static void export(Circuit circuit, StepByStep steps, Path path) throws IOException {
         BufferedImage image = renderCircuitImage(circuit, steps.getSolution());
-        export(circuit, steps.format(), image, path);
+        String text = steps.formatSimple()
+            + "\nApêndice — Versão completa (com matriz)\n"
+            + "A versão completa, com as equações, a matriz e a eliminação de\n"
+            + "Gauss, está a seguir. É a mesma conta, explicada com todo o detalhe.\n\n"
+            + steps.format();
+        export(circuit, text, image, path);
     }
 
     /** Gera o PDF com o texto do passo a passo e a imagem já renderizada. */
@@ -70,7 +78,8 @@ public final class PdfExporter {
             String line = sanitize(raw);
             boolean matrix = line.stripLeading().startsWith("[");
             double size = matrix ? 8.0 : 10.0;
-            boolean header = line.matches("^[0-9]\\. .*");
+            boolean header = line.matches("^[0-9]\\. .*")
+                || line.startsWith("Apêndice");
             if (header) {
                 all.add(new Line("", 10, false));
                 all.add(new Line(line, 12, true));

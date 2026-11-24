@@ -18,7 +18,11 @@ import javax.swing.SwingUtilities;
  * Ponto de entrada.
  * Sem argumentos: abre a GUI.
  * CLI: --solve <ficheiro.json> [--csv out.csv] [--report out.txt]
- *      [--passo-a-passo | --steps] [--pdf out.pdf]
+ *      [--passo-a-passo | --steps] [--passo-a-passo-completo | --completo]
+ *      [--pdf out.pdf]
+ * --passo-a-passo imprime a versão simples (padrão); a completa, com
+ * matriz, sai com --passo-a-passo-completo. O PDF leva a simples
+ * primeiro e a completa como apêndice.
  */
 public class Main {
     public static void main(String[] args) {
@@ -26,7 +30,7 @@ public class Main {
             System.exit(runCli(args));
         }
         if (args.length > 0) {
-            System.err.println("Uso: java -cp out com.circuitolab.app.Main [--solve <ficheiro.json> [--csv out.csv] [--report out.txt] [--passo-a-passo | --steps] [--pdf out.pdf]]");
+            System.err.println("Uso: java -cp out com.circuitolab.app.Main [--solve <ficheiro.json> [--csv out.csv] [--report out.txt] [--passo-a-passo | --steps] [--passo-a-passo-completo | --completo] [--pdf out.pdf]]");
             System.exit(2);
         }
         SwingUtilities.invokeLater(() -> new MainFrame().setVisible(true));
@@ -38,18 +42,22 @@ public class Main {
         Path report = null;
         Path pdf = null;
         boolean steps = false;
+        boolean stepsFull = false;
         for (int i = 2; i < args.length; i++) {
             if ("--csv".equals(args[i]) && i + 1 < args.length) csv = Path.of(args[++i]);
             else if ("--report".equals(args[i]) && i + 1 < args.length) report = Path.of(args[++i]);
             else if ("--pdf".equals(args[i]) && i + 1 < args.length) pdf = Path.of(args[++i]);
             else if ("--passo-a-passo".equals(args[i]) || "--steps".equals(args[i])) steps = true;
+            else if ("--passo-a-passo-completo".equals(args[i]) || "--completo".equals(args[i])
+                    || "--steps-full".equals(args[i])) stepsFull = true;
             else { System.err.println("Argumento desconhecido: " + args[i]); return 2; }
         }
         try {
             Circuit circuit = CircuitFileIO.load(input);
-            if (steps || pdf != null) {
+            if (steps || stepsFull || pdf != null) {
                 StepByStep stepByStep = MnaSolver.solveWithSteps(circuit);
-                if (steps) System.out.print(stepByStep.format());
+                if (steps) System.out.print(stepByStep.formatSimple());
+                if (stepsFull) System.out.print(stepByStep.format());
                 Solution solution = stepByStep.getSolution();
                 if (csv != null) {
                     CsvExporter.export(circuit, solution, csv);

@@ -27,9 +27,11 @@ Modo CLI (sem GUI):
 ./build.sh
 java -cp out com.circuitolab.app.Main --solve examples/divisor-tensao.json
 java -cp out com.circuitolab.app.Main --solve examples/ponte-wheatstone.json --csv out.csv --report out.txt
-# Passo a passo completo no terminal (ver abaixo):
+# Passo a passo simples no terminal (ver abaixo — é o padrão):
 java -cp out com.circuitolab.app.Main --solve examples/divisor-tensao.json --passo-a-passo
 java -cp out com.circuitolab.app.Main --solve examples/delta-estrela.json --steps
+# Versão completa, com matriz (ver abaixo):
+java -cp out com.circuitolab.app.Main --solve examples/divisor-tensao.json --passo-a-passo-completo
 # Passo a passo em PDF, com o desenho do circuito (ver abaixo):
 java -cp out com.circuitolab.app.Main --solve examples/serie.json --passo-a-passo --pdf serie-passo-a-passo.pdf
 java -cp out com.circuitolab.app.Main --solve examples/delta-estrela.json --pdf delta-passo-a-passo.pdf
@@ -67,7 +69,37 @@ java -cp out com.circuitolab.app.Main --solve examples/delta-estrela.json --pdf 
 
 O botão **Passo a Passo** (na barra de ferramentas) e o menu
 **Exibir > Passo a Passo...** resolvem o circuito atual e abrem um diálogo
-com o cálculo completo, explicado como um tutorial — dá para acompanhar
+com duas abas: **Simples** (abre nela) e **Completa (com matriz)**.
+
+### Versão simples (o padrão)
+
+Linguagem de leigo, frases curtas, só Lei de Ohm e LKC — sem matriz,
+sem Gauss, sem "condutância". Antes de qualquer conta, o passo a passo
+junta os nós que são o mesmo ponto elétrico: um fio, um indutor ou o
+terra, em DC, são um curto (0 V), por isso os nós que eles ligam têm a
+mesma tensão e contam como um ponto só (ex.: N0, N4, N6 e N8 ligados por
+fios são o terra, 0 V — e não quatro incógnitas separadas). Depois
+separa o que já se sabe do que falta descobrir:
+
+1. **O que a gente quer descobrir** — tensões e correntes, e o desenho
+   em poucas linhas (cada componente com rótulo, valor e nós A/B).
+2. **O que já sabemos sem fazer conta** — o terra (0 V), os pontos que
+   são o mesmo que o terra, e os nós ligados direto a uma fonte
+   (ex.: "o nó N3 está em 10 V: a fonte V1 liga-o ao terra").
+3. **O que falta descobrir** — só as tensões que não se sabem (na maior
+   parte dos circuitos é uma só).
+4. **A conta** — a LKC no ponto, em palavras e com os números; com uma
+   só incógnita, a álgebra toda até isolar ela, passo a passo
+   (juntar os termos, dividir). Com duas ou mais, mostra as equações
+   e os valores, e a resolução completa está na versão completa.
+5. **As correntes** — cada resistor pela Lei de Ohm, com a conta e o
+   sentido em palavras; fios e fontes numa frase curta cada um.
+6. **Confere?** — no ponto principal, o que entra = o que sai, e o
+   balanço de potência (fornecido = dissipado), uma linha cada.
+
+### Versão completa (com matriz)
+
+O cálculo completo, explicado como um tutorial — dá para acompanhar
 e perceber o que está a acontecer, não só copiar o resultado. O texto
 usa sempre os rótulos e os números dos nós do desenho, com unidades
 amigáveis (mA, kΩ, ...) e 3 casas decimais nas explicações; a matriz
@@ -97,15 +129,17 @@ mantém 6 casas decimais.
    de resistores: as fórmulas `R_Y = R·R / (soma dos 3 R)`, os valores
    e a tensão do centro da estrela.
 
-No CLI, a mesma saída sai no terminal com `--passo-a-passo` (ou `--steps`),
-e o relatório TXT (`--report` / Exportar relatório) inclui o passo a passo
+No CLI, a versão simples sai no terminal com `--passo-a-passo` (ou
+`--steps`); a completa, com `--passo-a-passo-completo` (ou `--completo`).
+O relatório TXT (`--report` / Exportar relatório) inclui o passo a passo
 no fim do ficheiro.
 
 ### Exportar o passo a passo para PDF (com o desenho)
 
 O PDF é gerado em Java puro (sem bibliotecas externas): A4, cabeçalho com
 o nome do circuito, rodapé com o número da página, o desenho do circuito
-renderizado e o texto completo do passo a passo (o mesmo da GUI e do CLI).
+renderizado, primeiro a **versão simples** do passo a passo e, como
+**apêndice**, a versão completa (com matriz).
 
 - **Na GUI:** botão **Exportar PDF** no diálogo do Passo a Passo, ou menu
   **Arquivo > Exportar passo a passo (PDF)...**. O nome sugerido é
@@ -140,6 +174,7 @@ nó flutuante e sistema singular.
 | `paralelo.json` — 12 V, 1 kΩ // 2 kΩ | Tensão: **12,00 V**; correntes: **12 mA** e **6 mA** |
 | `delta-estrela.json` — 12 V, série 10 Ω, delta 30 Ω, carga 15 Ω | Corrente total: **0,2667 A**; VA: **9,333 V**; VB: **6,667 V**; VC: **4,000 V**; R_Y = **10 Ω** por ramo |
 | `fonte-corrente.json` — 10 mA // 1 kΩ | Tensão: **10,00 V**; corrente no resistor: **10 mA** |
+| `circuito-lucas.json` — 10 V + 12 V, 20 Ω / 2 Ω / 9 Ω, fios ao terra | Nó do meio: **2,773 V**; correntes: **0,361 A**, **1,387 A** e **1,025 A**; N0, N4, N6 e N8 são o mesmo ponto (terra) |
 
 ## Arquitetura
 
@@ -149,7 +184,9 @@ src/main/java/com/circuitolab/
             CurrentSource, Capacitor, Inductor, Wire, Ground
   solver/   MnaSolver (MNA), MatrixSolver (Gauss + pivotamento parcial,
             com rasto solveWithTrace), StepByStep (passo a passo
-            explicado, secções 0-7), Solution, SolverException
+            explicado, secções 0-7; versão simples formatSimple),
+            NetMerger (redes: nós que são o mesmo ponto elétrico),
+            Solution, SolverException
   io/       CircuitFileIO (JSON manual, sem libs), JsonParser,
             CsvExporter, ReportExporter (inclui o passo a passo),
             PdfExporter (PDF à mão: A4, Helvetica, imagem FlateDecode)
@@ -157,7 +194,8 @@ src/main/java/com/circuitolab/
             StepByStepDialog
   util/     ValueParser (valores "2k", "1,5", "10m" e formatação
             amigável com unidades)
-  app/      Main (GUI ou CLI --solve [--passo-a-passo | --steps] [--pdf])
+  app/      Main (GUI ou CLI --solve [--passo-a-passo | --steps]
+            [--passo-a-passo-completo | --completo] [--pdf])
 src/test/java/com/circuitolab/
   SolverTest, TestRunner (runner próprio, sem JUnit) — 21 testes
 examples/   divisor-tensao.json, ponte-wheatstone.json, serie.json,

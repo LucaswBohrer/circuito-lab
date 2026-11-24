@@ -5,12 +5,15 @@ import com.circuitolab.model.Capacitor;
 import com.circuitolab.model.Circuit;
 import com.circuitolab.model.Component;
 import com.circuitolab.model.CurrentSource;
+import com.circuitolab.model.Ground;
 import com.circuitolab.model.Inductor;
 import com.circuitolab.model.Node;
 import com.circuitolab.model.Resistor;
 import com.circuitolab.model.VoltageSource;
+import com.circuitolab.model.Wire;
 import com.circuitolab.solver.MatrixSolver;
 import com.circuitolab.solver.MnaSolver;
+import com.circuitolab.solver.NetMerger;
 import com.circuitolab.solver.Solution;
 import com.circuitolab.solver.SolverException;
 import com.circuitolab.solver.StepByStep;
@@ -432,5 +435,141 @@ public class SolverTest {
             idx += needle.length();
         }
         return count;
+    }
+
+    // ------------------------------------------------------------------
+    // v1.3 — Redes (nets), versão simples do passo a passo, PDF com apêndice.
+    // ------------------------------------------------------------------
+
+    /**
+     * O circuito do PDF do Lucas (v1.2): V1=10V N3-N4, R1=20Ω N3-N5,
+     * R2=2Ω N5-N6, W7 N8-N6, W8 N6-N4, GND N4-N0, R3=9Ω N5-N11,
+     * V15=12V N11-N8. Nó do meio: 330/119 = 2,773 V.
+     */
+    private static Circuit lucasCircuit() {
+        Circuit c = new Circuit("Novo circuito");
+        c.addNodeWithId(new Node(3, 200, 100));
+        c.addNodeWithId(new Node(4, 200, 300));
+        c.addNodeWithId(new Node(5, 400, 100));
+        c.addNodeWithId(new Node(6, 400, 300));
+        c.addNodeWithId(new Node(8, 600, 300));
+        c.addNodeWithId(new Node(11, 600, 100));
+        c.addComponent(new VoltageSource("V1", "V1", 3, 4, 10, 200, 100, 200, 300));
+        c.addComponent(new Resistor("R1", "R1", 3, 5, 20, 200, 100, 400, 100));
+        c.addComponent(new Resistor("R2", "R2", 5, 6, 2, 400, 100, 400, 300));
+        c.addComponent(new Wire("W7", "W7", 8, 6, 600, 300, 400, 300));
+        c.addComponent(new Wire("W8", "W8", 6, 4, 400, 300, 200, 300));
+        c.addComponent(new Ground("GND", "GND", 4, 200, 300));
+        c.addComponent(new Resistor("R3", "R3", 5, 11, 9, 400, 100, 600, 100));
+        c.addComponent(new VoltageSource("V15", "V15", 11, 8, 12, 600, 100, 600, 300));
+        return c;
+    }
+
+    /** Redes: N0, N4, N6, N8 são o mesmo ponto; N3 e N11 são redes diferentes. */
+    public static void netMergerLucasCircuit() {
+        Circuit c = lucasCircuit();
+        NetMerger merger = new NetMerger(c);
+        check(merger.netOf(0) == 0, "Terra devia ser a rede 0.");
+        check(merger.netOf(4) == 0, "N4 devia estar na rede do terra.");
+        check(merger.netOf(6) == 0, "N6 devia estar na rede do terra.");
+        check(merger.netOf(8) == 0, "N8 devia estar na rede do terra.");
+        check(merger.netOf(3) == 3, "N3 devia ser a sua própria rede.");
+        check(merger.netOf(11) == 11, "N11 devia ser a sua própria rede.");
+        check(merger.netOf(5) == 5, "N5 devia ser a sua própria rede.");
+        check(merger.nets().size() == 4, "Devia haver 4 redes, há " + merger.nets().size() + ".");
+        NetMerger.Net ground = merger.netContaining(6);
+        check(ground != null && ground.isGround(), "A rede de N6 devia ser o terra.");
+        check(ground.nodes().size() == 4, "A rede do terra devia ter 4 nós.");
+    }
+
+    /**
+     * Versão simples do circuito do Lucas: só o nó do meio é incógnita
+     * (2,773 V), N4/N6/N8 não aparecem como incógnitas separadas, e o
+     * texto tem menos de 1/3 das linhas da versão completa.
+     */
+    public static void simpleStepByStepLucasCircuit() throws SolverException {
+        Circuit c = lucasCircuit();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        Solution s = steps.getSolution();
+        approx(s.voltageOf(5), 330.0 / 119.0, "Tensão do nó do meio (2,773 V)");
+        approx(s.currentOf("R1"), 0.361345, "Corrente em R1 (0,361 A)");
+        approx(s.currentOf("R2"), 1.386555, "Corrente em R2 (1,387 A)");
+        approx(s.currentOf("R3"), -1.025210, "Corrente em R3 (-1,025 A)");
+
+        String simple = steps.formatSimple();
+        String full = steps.format();
+        check(simple.contains("2,773 V"), "Versão simples devia mostrar 2,773 V.");
+        check(simple.contains("Só falta um ponto"), "Versão simples devia dizer que só falta um ponto.");
+        check(simple.contains("N0, N4, N6 e N8 são o mesmo ponto"),
+            "Versão simples devia dizer que N0, N4, N6 e N8 são o mesmo ponto.");
+        check(simple.contains("0,361 A"), "Versão simples devia mostrar 0,361 A (R1).");
+        check(simple.contains("1,387 A"), "Versão simples devia mostrar 1,387 A (R2).");
+        check(simple.contains("1,025 A"), "Versão simples devia mostrar 1,025 A (R3).");
+        check(simple.contains("V x 0,661"), "Versão simples devia mostrar a conta V x 0,661.");
+        check(!simple.contains("Gauss"), "Versão simples não pode falar de Gauss.");
+        check(!simple.contains("condutância"), "Versão simples não pode falar de condutância.");
+        check(!simple.contains("Matriz"), "Versão simples não pode falar de matriz.");
+        check(!simple.contains("x1 ="), "Versão simples não pode listar incógnitas x1, x2...");
+        int simpleLines = simple.split("\n", -1).length;
+        int fullLines = full.split("\n", -1).length;
+        check(simpleLines * 3 < fullLines,
+            "Versão simples devia ter menos de 1/3 das linhas da completa ("
+            + simpleLines + " vs " + fullLines + ").");
+    }
+
+    /** A versão completa continua igual: matriz 11x11, Gauss, 11 incógnitas. */
+    public static void completeVersionUnchanged() throws SolverException {
+        Circuit c = lucasCircuit();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        check(steps.getUnknowns().size() == 11,
+            "Circuito do Lucas devia ter 11 incógnitas na versão completa, tem "
+            + steps.getUnknowns().size() + ".");
+        String full = steps.format();
+        check(full.contains("Eliminação de Gauss"), "Versão completa devia ter Gauss.");
+        check(full.contains("Matriz aumentada"), "Versão completa devia ter a matriz.");
+        check(full.contains("Retrosubstituição"), "Versão completa devia ter retrosubstituição.");
+    }
+
+    /** Versão simples com 2 incógnitas (ponte): equações + resultados, sem Gauss. */
+    public static void simpleStepByStepMultiUnknown() throws SolverException {
+        Circuit c = Examples.ponteWheatstone();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        String simple = steps.formatSimple();
+        check(simple.contains("Faltam 2 pontos"),
+            "Ponte devia ter 2 pontos por descobrir na versão simples.");
+        check(simple.contains("6,000 V"), "Versão simples da ponte devia mostrar 6,000 V.");
+        check(!simple.contains("Gauss"), "Versão simples não pode falar de Gauss.");
+        check(!simple.contains("Matriz"), "Versão simples não pode falar de matriz.");
+        check(simple.contains("versão completa"),
+            "Versão simples com 2 incógnitas devia apontar para a versão completa.");
+        String full = steps.format();
+        int simpleLines = simple.split("\n", -1).length;
+        int fullLines = full.split("\n", -1).length;
+        check(simpleLines < fullLines,
+            "Versão simples da ponte devia ser mais curta que a completa.");
+    }
+
+    /** PDF: versão simples primeiro e completa como apêndice, com a imagem. */
+    public static void pdfSimplePlusAppendix() throws Exception {
+        Circuit c = lucasCircuit();
+        StepByStep steps = MnaSolver.solveWithSteps(c);
+        Path tmp = Files.createTempFile("circuitolab-teste-v13-", ".pdf");
+        try {
+            PdfExporter.export(c, steps, tmp);
+            byte[] bytes = Files.readAllBytes(tmp);
+            String head = new String(bytes, 0, 5, StandardCharsets.US_ASCII);
+            check(head.equals("%PDF-"), "PDF devia começar com %PDF-.");
+            String all = new String(bytes, StandardCharsets.ISO_8859_1);
+            check(all.contains("/Image"), "PDF devia conter a imagem do desenho (/Image).");
+            check(all.contains("Passo a passo simples"),
+                "PDF devia conter a versão simples.");
+            check(all.contains("Apêndice"),
+                "PDF devia conter o apêndice com a versão completa.");
+            check(all.indexOf("Passo a passo simples") < all.indexOf("Apêndice"),
+                "A versão simples devia vir antes do apêndice no PDF.");
+            check(all.contains("%%EOF"), "PDF devia terminar com %%EOF.");
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
     }
 }
